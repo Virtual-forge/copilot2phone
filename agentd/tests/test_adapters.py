@@ -143,17 +143,16 @@ def test_codex_kind_heuristics():
 
 def test_codex_render_deny_uses_exit_two():
     adapter = codex_hook.CodexAdapter()
-    body, code = adapter.render_deny(None, "blocked")
+    stderr, code = adapter.render_deny(None, "blocked")
     assert code == 2
-    assert "blocked" in body
-    assert "deny" in body
+    assert "blocked" in stderr
 
 
 def test_codex_render_allow_uses_exit_zero():
     adapter = codex_hook.CodexAdapter()
-    body, code = adapter.render_allow(None)  # type: ignore[arg-type]
+    stdout, code = adapter.render_allow(None)  # type: ignore[arg-type]
     assert code == 0
-    assert "allow" in body
+    assert stdout == ""
 
 
 # --- shared helpers -------------------------------------------------------
