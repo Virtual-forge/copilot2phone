@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / PWA
+node_modules/
+pwa/dist/
+*.tsbuildinfo
+
+# AgentLink local state (never commit keys or the local DB)
+.agentlink/
+*.db
+*.db-wal
+*.db-shm
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
