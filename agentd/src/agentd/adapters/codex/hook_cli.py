@@ -31,13 +31,37 @@ class CodexAdapter:
         return parse(payload)
 
     def render_allow(self, action: Action) -> tuple[str, int]:
-        return "", ALLOW_EXIT
+        payload = {
+            "decision": "allow",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        }
+        return json.dumps(payload), ALLOW_EXIT
 
     def render_deny(self, action: Action | None, reason: str) -> tuple[str, int]:
-        return f"AgentLink blocked this action: {reason}", BLOCK_EXIT
+        msg = f"AgentLink blocked this action: {reason}"
+        payload = {
+            "decision": "block",
+            "reason": msg,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": msg,
+            },
+        }
+        return json.dumps(payload), BLOCK_EXIT
 
 
-def _emit(text: str) -> None:
+def _emit_out(text: str) -> None:
+    if text:
+        sys.stdout.write(text)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+def _emit_err(text: str) -> None:
     if text:
         sys.stderr.write(text)
         sys.stderr.write("\n")
@@ -51,25 +75,35 @@ def run(stdin_text: str) -> int:
     try:
         payload = json.loads(stdin_text) if stdin_text.strip() else {}
     except json.JSONDecodeError:
-        _emit(adapter.render_deny(None, "malformed hook payload")[0])
-        return BLOCK_EXIT
+        out, code = adapter.render_deny(None, "malformed hook payload")
+        _emit_out(out)
+        _emit_err("malformed hook payload")
+        return code
 
     try:
         action = adapter.parse(payload)
     except HookParseError as exc:
-        _emit(adapter.render_deny(None, f"could not parse hook payload: {exc}")[0])
-        return BLOCK_EXIT
+        out, code = adapter.render_deny(None, f"could not parse hook payload: {exc}")
+        _emit_out(out)
+        _emit_err(f"could not parse hook payload: {exc}")
+        return code
 
     try:
         outcome = call_daemon(action)
     except DaemonUnavailable as exc:
-        _emit(adapter.render_deny(action, f"daemon unavailable ({exc})")[0])
-        return BLOCK_EXIT
+        out, code = adapter.render_deny(action, f"daemon unavailable ({exc})")
+        _emit_out(out)
+        _emit_err(f"daemon unavailable ({exc})")
+        return code
 
     if outcome.allowed:
-        return ALLOW_EXIT
-    _emit(adapter.render_deny(action, outcome.reason or "denied")[0])
-    return BLOCK_EXIT
+        out, code = adapter.render_allow(action)
+        _emit_out(out)
+        return code
+    out, code = adapter.render_deny(action, outcome.reason or "denied")
+    _emit_out(out)
+    _emit_err(outcome.reason or "denied")
+    return code
 
 
 def main() -> int:
