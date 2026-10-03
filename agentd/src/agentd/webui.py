@@ -22,7 +22,9 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#0d1017">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>AgentLink</title>
 <style>
   :root {
@@ -153,6 +155,21 @@ PAGE = r"""<!doctype html>
     padding: 10px 16px; border-radius: 6px; font-size: 13.5px; z-index: 60;
     box-shadow: 0 10px 32px rgba(0,0,0,.55);
   }
+  /* session input (D-026): a composer under the chat, opencode sessions only */
+  .composer {
+    display: flex; gap: 8px; align-items: flex-end;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--line);
+  }
+  .composer textarea {
+    flex: 1; resize: none; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); font: 14.5px/1.45 inherit;
+    font-family: inherit; padding: 11px 12px; min-height: 43px; max-height: 32vh;
+  }
+  .composer textarea:focus { outline: none; border-color: var(--accent-line); }
+  .composer button {
+    flex: none; width: auto; padding: 12px 20px;
+  }
   /* chat */
   .chat { display: flex; flex-direction: column; gap: 12px; }
   .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
@@ -249,6 +266,12 @@ PAGE = r"""<!doctype html>
   <div class="tabs hidden" id="tabs"></div>
 </header>
 <main id="main"></main>
+
+<div class="composer hidden" id="composer">
+  <textarea id="promptText" rows="1" placeholder="Send a prompt to this session"
+            autocapitalize="sentences" autocomplete="off" spellcheck="false"></textarea>
+  <button class="primary" id="promptSend">Send</button>
+</div>
 
 <div class="overlay hidden" id="gate">
   <div class="card">
@@ -860,6 +883,7 @@ async function refresh() {
     if (hdr) hdr.textContent = "offline";
   } finally {
     refreshing = false;
+    updateComposer();
   }
 }
 
@@ -955,6 +979,83 @@ function tickCountdowns() {
 }
 setInterval(tickCountdowns, 1000);
 
+/* ---------- session input (D-026) ---------- */
+
+async function sendPrompt() {
+  const box = document.getElementById("promptText");
+  const text = box.value.trim();
+  if (!text) return;
+  const id = route().id;
+  if (!id) return;
+  try {
+    await api("/v1/sessions/" + encodeURIComponent(id) + "/input", {
+      method: "POST",
+      body: JSON.stringify({ text: text })
+    });
+    box.value = "";
+    box.style.height = "auto";
+    toast("Prompt sent — the reply will stream into the chat");
+  } catch (err) {
+    toast("Could not send: " + err.message);
+  }
+}
+
+function updateComposer() {
+  const box = document.getElementById("composer");
+  if (!box) return;
+  const mine = sessionInfo && sessionInfo.agent_type === "opencode" &&
+               route().view === "session";
+  box.classList.toggle("hidden", !mine);
+  if (!mine) {
+    const field = document.getElementById("promptText");
+    if (field) field.value = "";
+  }
+}
+
+/* ---------- live stream (D-026) ----------
+   The SSE endpoint pushes a tiny "something changed" notice per ingest; the
+   fetch-based reader (EventSource cannot send the Authorization header)
+   then triggers a normal incremental refresh. If the stream drops — tunnel
+   hiccup, daemon restart — the 2s poll keeps working and the stream retries. */
+let streamAbort = null;
+let streamRetry = null;
+
+async function startStream() {
+  if (streamAbort || !token) return;
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  streamAbort = ctrl;
+  try {
+    const res = await fetch("/v1/stream", {
+      headers: {
+        "Authorization": "Bearer " + token,
+        "ngrok-skip-browser-warning": "true"
+      },
+      signal: ctrl ? ctrl.signal : undefined
+    });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buf += dec.decode(chunk.value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        if (frame.indexOf("event: change") === 0) refresh();
+      }
+    }
+  } catch (err) { /* offline or aborted: the poll is the fallback */ }
+  finally {
+    if (streamAbort === ctrl) streamAbort = null;
+    if (!streamRetry) {
+      streamRetry = setTimeout(() => { streamRetry = null; startStream(); }, 4000);
+    }
+  }
+}
+
 /* ---------- boot ---------- */
 document.getElementById("saveToken").addEventListener("click", async () => {
   const v = document.getElementById("tokenInput").value.trim();
@@ -992,6 +1093,25 @@ window.addEventListener("hashchange", () => {
 if (!token) showGate("");
 refresh();
 setInterval(refresh, POLL_MS);
+
+document.getElementById("promptSend").addEventListener("click", sendPrompt);
+document.getElementById("promptText").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+});
+document.getElementById("promptText").addEventListener("input", e => {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.32) + "px";
+});
+
+startStream();
+
+/* Installable as an app where the context is secure (the tunnel, or
+   localhost); plain-LAN http just stays a tab. */
+try {
+  if (window.isSecureContext && navigator && navigator.serviceWorker) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+} catch (err) { /* no service worker in this context */ }
 </script>
 </body>
 </html>

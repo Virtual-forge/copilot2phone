@@ -197,4 +197,15 @@ Append-only. Newest at the bottom. Each entry: what was decided, why, and where 
 **Spec:** §8.1, §12 (superseded in part).
 **Implemented:** `agentd/src/agentd/transcripts/opencode.py`, `agentd/src/agentd/db.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/webui.py`.
 
+## D-026 — The phone can talk back: session input and a live stream
+
+**Decision:** Two additions turn the phone from a gate into a remote. `POST /v1/sessions/{id}/input` queues a prompt for an **OpenCode** session — delivered by shelling out to `opencode run --session <id>`, the same background service the desktop TUI talks to, fired and forgotten with one in-flight prompt per session. `GET /v1/stream` is a server-sent-events channel that pushes one tiny notice per ingest ("this session changed"); the phone refetches incrementally the instant anything happens instead of waiting out the poll, which stays as the fallback. The page also ships a manifest, an icon and a shell-only service worker, making it installable as an app over https.
+
+**Why:** OpenCode's background service owns the sessions, so a prompt delivered through it runs *on the desktop* and lands in the same transcript the reader already mirrors — the prompt and the streaming reply appear in the chat with no new data path (verified against a real session: the CLI is a thin client; the turn completes server-side even if the caller dies). The HTTP API was deliberately not used: its auth handshake is undocumented and the CLI already solves discovery (service state) and authentication. The SSE payload is only *what* changed, so auth, redaction and tail rules still apply to every byte of real data. And the socket-level pairing makes prompts feel synchronous: without it the phone waits out the 2-second poll between "sent" and "seeing it land".
+
+**Consequences:** Input is OpenCode-only for now — Codex sessions get a clear 409 (its channel is the resume/app-server probe in `remote-codex-direction.md`). Prompts are validated (empty → 400; anything the CLI would eat as a flag, i.e. leading `-`, → 503) and every send is audited as `input.sent` with the text redacted. The CLI's per-session stream is appended to `~/.agentlink/logs/opencode-input-<session>.log` for debugging. The input raises the token's power from *approve* to *author*, which is why `docs/mobile-app-plan.md` M3 (relay or overlay transport, per-device keys) gates the "daily driver over the internet" step. The SSE reader is fetch-based because `EventSource` cannot send the Authorization header; it reconnects with backoff and the poll covers outages. The service worker caches the shell (which contains no secrets — the token lives in localStorage) and bypasses `/v1` entirely.
+
+**Spec:** §12.4, §11 (superseded in part).
+**Implemented:** `agentd/src/agentd/opencode_input.py`, `agentd/src/agentd/activity.py`, `agentd/src/agentd/local_api.py`, `agentd/src/agentd/webui.py`, `docs/mobile-app-plan.md`.
+
 

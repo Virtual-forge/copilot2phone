@@ -19,16 +19,18 @@ agent hook  ->  agentd (loopback API)  ->  decision  ->  hook unblocks
 | `agentd` daemon (local API, approvals, policy, audit, sessions) | ✅ slice 1 |
 | Codex hook adapter | ✅ slice 1 (contract pending Phase 0) |
 | OpenCode session monitoring (chat + activity, no gating) | ✅ |
+| **Send prompts into OpenCode sessions from the phone** | ✅ (D-026) |
 | `agentlink-sim` (terminal phone) | ✅ slice 1 |
 | Off-LAN access via ngrok tunnel | ✅ `agentd run --tunnel` |
 | Session-centric phone UI (sessions → chat / activity / approvals) | ✅ |
 | Approvals inline in the chat timeline | ✅ |
+| **Installable as an app (PWA shell) over https** | ✅ |
 | Transcript ingestion (Codex + OpenCode, both verified against real data) | ✅ |
-| Cloud relay + E2E crypto | ⏳ slice 2 |
+| Live activity stream | ✅ SSE + 2s poll fallback |
+| Cloud relay + E2E crypto | ⏳ slice 2 — the security step before heavy remote use |
 | Real hook installation (`agentd install`) | ⏳ slice 3 |
 | Git diff engine + file browser | ⏳ slice 5 |
-| Live activity stream | 🟡 polling (SSE/WS pending) |
-| PWA | ⏳ slice 7 |
+| Web push notifications | ⏳ `docs/mobile-app-plan.md` M2 |
 
 ## Layout
 
@@ -161,6 +163,18 @@ Policy auto-allow / auto-deny decisions — a read inside the workspace, say —
 never become cards, because there would be one per file read. They stay in
 **Activity**.
 
+### Typing into a session
+
+OpenCode sessions can be **driven** from the phone (D-026): the composer
+under the chat queues a prompt with the same background service the desktop
+TUI uses, so the turn runs on the PC — the prompt and the agent's reply
+stream back into the chat like any other message, live over SSE. One prompt
+runs per session at a time, prompts are audited, and Codex sessions answer
+with a clear "not yet supported" until their channel lands
+([`docs/mobile-app-plan.md`](docs/mobile-app-plan.md) is the roadmap —
+pairing the app, push notifications, the secure transport, and new sessions
+from the phone).
+
 The chat is the conversation, not the harness. A Codex turn boundary
 (`task_started` / `task_complete`) and the `exec` / `wait` polling loop behind a
 single shell command are recorded as lifecycle and `tool_plumbing` events: they
@@ -215,13 +229,14 @@ cd agentd
 python -m pytest -q
 ```
 
-157 tests, including a real end-to-end run (a live daemon plus the real hook
-entrypoint), the cross-agent segregation check, the tunnel wiring (ngrok is
-faked, so the suite passes without it installed), the transcript readers
-driven by synthetic Codex rollouts (including a resumed thread split across
-several rollout files, and incremental re-scan from persisted high-water
-marks) and a synthetic OpenCode session database, and the chat timeline fold
-run under node against the page's own JavaScript.
+165 tests, including a real end-to-end run (a live daemon plus the real hook
+entrypoint and a real-socket SSE stream), the cross-agent segregation check,
+the tunnel wiring (ngrok is faked, so the suite passes without it
+installed), the transcript readers driven by synthetic Codex rollouts
+(including a resumed thread split across several rollout files, and
+incremental re-scan from persisted high-water marks) and a synthetic
+OpenCode session database, the session-input guard rails, and the chat
+timeline fold run under node against the page's own JavaScript.
 
 ## Phase 0
 

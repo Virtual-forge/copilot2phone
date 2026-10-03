@@ -192,6 +192,126 @@ def test_token_compare_tolerates_non_ascii():
     assert not _token_matches("real-token", "other-token")
 
 
+# --- session input (D-026) ---------------------------------------------------
+
+
+async def _make_opencode_session(client, session_id: str = "oc1") -> None:
+    await client.post(
+        "/v1/events",
+        json=[
+            event(
+                agent_type="opencode",
+                session_id=session_id,
+                event_id=f"opencode:{session_id}:0",
+            )
+        ],
+    )
+
+
+async def test_input_queues_a_prompt_and_guards_in_flight(ctx, client, monkeypatch):
+    """The prompt is fired at the OpenCode CLI and never awaited: the endpoint
+    returns as soon as it is queued, and a second prompt for the same session
+    is refused while one is still running."""
+    from agentd import opencode_input
+
+    await _make_opencode_session(client)
+    sent: list[list[str]] = []
+
+    class FakeProcess:
+        done = False
+
+        def poll(self):
+            return 0 if FakeProcess.done else None
+
+    def fake_spawn(argv, **kwargs):
+        sent.append(argv)
+        return FakeProcess()
+
+    monkeypatch.setattr(opencode_input.shutil, "which", lambda name: "/fake/bin")
+    monkeypatch.setattr(ctx.input, "_spawn", fake_spawn)
+
+    response = await client.post("/v1/sessions/oc1/input", json={"text": "hi there"})
+    assert response.status_code == 200
+    assert response.json() == {"queued": True, "session_id": "oc1"}
+    assert sent[0][1:4] == ["run", "--session", "oc1"]
+    assert sent[0][-1] == "hi there"
+
+    # one prompt at a time per session
+    again = await client.post("/v1/sessions/oc1/input", json={"text": "again"})
+    assert again.status_code == 409
+
+    # once the CLI exits the guard clears
+    FakeProcess.done = True
+    cleared = await client.post("/v1/sessions/oc1/input", json={"text": "next"})
+    assert cleared.status_code == 200
+    assert len(sent) == 2
+
+
+async def test_input_rejects_unknown_session(client):
+    response = await client.post("/v1/sessions/nope/input", json={"text": "hi"})
+    assert response.status_code == 404
+
+
+async def test_input_rejects_other_agents(client):
+    """Codex has no input channel yet — a clear 409, not a silent nothing."""
+    await client.post("/v1/events", json=[event(event_id="codex:s1:0")])
+    response = await client.post("/v1/sessions/s1/input", json={"text": "hi"})
+    assert response.status_code == 409
+    assert "codex" in response.json()["detail"]
+
+
+async def test_input_rejects_empty_and_flag_like_prompts(ctx, client, monkeypatch):
+    from agentd import opencode_input
+
+    await _make_opencode_session(client)
+    monkeypatch.setattr(opencode_input.shutil, "which", lambda name: "/fake/bin")
+
+    empty = await client.post("/v1/sessions/oc1/input", json={"text": "   "})
+    assert empty.status_code == 400
+
+    flag = await client.post("/v1/sessions/oc1/input", json={"text": "--version"})
+    assert flag.status_code == 503  # the CLI would eat it as a flag
+
+
+async def test_input_503_when_the_cli_is_missing(ctx, client, monkeypatch):
+    from agentd import opencode_input
+
+    await _make_opencode_session(client)
+    monkeypatch.setattr(opencode_input.shutil, "which", lambda name: None)
+    response = await client.post("/v1/sessions/oc1/input", json={"text": "hi"})
+    assert response.status_code == 503
+
+
+# --- live stream (D-026) ------------------------------------------------------
+# The SSE endpoint is exercised over a real socket in test_e2e_slice1.py:
+# in-memory ASGI transports buffer streaming responses, so an infinite event
+# stream would hang them. The wake-up logic itself is covered in
+# test_activity.py::test_ingest_wakes_stream_subscribers.
+
+
+# --- installable app shell ----------------------------------------------------
+
+
+async def test_pwa_shell_is_served(client):
+    """Manifest, icon and service worker make the page installable; none of
+    them carry secrets and none of them touch /v1."""
+    manifest = (await client.get("/manifest.webmanifest")).json()
+    assert manifest["name"] == "AgentLink"
+    assert manifest["display"] == "standalone"
+
+    icon = await client.get("/icon.svg")
+    assert icon.status_code == 200
+    assert icon.headers["content-type"].startswith("image/svg+xml")
+
+    worker = await client.get("/sw.js")
+    assert worker.status_code == 200
+    body = worker.text
+    # the shell is cached for offline, API traffic is never cached
+    assert "agentlink-shell" in body
+    assert "startsWith('/v1')" in body
+
+
+
 # --- approvals feed the stream --------------------------------------------
 
 

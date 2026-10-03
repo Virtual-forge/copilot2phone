@@ -2,15 +2,20 @@
 
 Everything a session does — chat turns, tool calls, approvals, lifecycle — is
 recorded here as an :class:`ActivityEvent` with a monotonic ``seq`` per
-``(agent_type, session_id)``. The chat view is simply the subset of events whose
+ ``(agent_type, session_id)``. The chat view is simply the subset of events whose
 kind is a message kind (see :data:`agentd.protocol.CHAT_KINDS`).
 
 Events carry a caller-supplied ``event_id`` so re-reading a transcript file is
 idempotent: the same line always maps to the same id and is ignored on re-scan.
+
+Every ingest also wakes the live-stream subscribers (D-026): the SSE endpoint
+hands them "this session changed", and the phone refetches incrementally
+instead of waiting out the poll interval.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -50,6 +55,30 @@ class ActivityManager:
     def __init__(self, *, db: Database, sessions: SessionManager) -> None:
         self._db = db
         self._sessions = sessions
+        self._listeners: set[asyncio.Queue] = set()
+
+    # --- live change notifications (D-026) ------------------------------
+
+    def subscribe(self) -> asyncio.Queue:
+        """Register for "something changed" wake-ups; see :meth:`_wake`."""
+        queue: asyncio.Queue = asyncio.Queue()
+        self._listeners.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue) -> None:
+        self._listeners.discard(queue)
+
+    def _wake(self, agent_type: AgentType, session_id: str) -> None:
+        """Nudge every live stream that this session changed.
+
+        The payload is intentionally tiny — *what* changed, not the change —
+        so clients refetch through the normal authenticated endpoints.
+        """
+        if not self._listeners:
+            return
+        notice = {"agent_type": agent_type.value, "session_id": session_id}
+        for queue in list(self._listeners):
+            queue.put_nowait(notice)
 
     async def ingest(
         self,
@@ -123,6 +152,9 @@ class ActivityManager:
             await self._db.set_session_activity(
                 session_id=session_id, last_activity_at=latest, message_count=count
             )
+        # Wake the live streams: the phone refetches incrementally instead
+        # of waiting out the poll interval.
+        self._wake(agent_type, session_id)
         return inserted
 
     async def record(

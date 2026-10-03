@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -18,15 +19,16 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from . import __version__, paths, webui
 from .activity import ActivityManager, IncomingEvent
 from .approvals import ApprovalConflict, ApprovalManager, ApprovalNotFound
 from .audit import AuditLog
 from .config import Config, load_config
-from .crypto import new_token
+from .crypto import new_token, redact_text
 from .db import Database
+from .opencode_input import InputUnavailable, OpencodeInput
 from .policy import PolicyEngine
 from .protocol import (
     Action,
@@ -40,6 +42,7 @@ from .protocol import (
     MessageRecord,
     MessageRole,
     SessionDetail,
+    SessionInputRequest,
     SessionSummary,
     iso,
     utcnow,
@@ -52,6 +55,9 @@ HOUSEKEEPING_INTERVAL_SECONDS = 3600
 #: A session whose transcripts have been quiet for this long stops showing the
 #: "active" badge (and stops pretending to be running).
 SESSION_IDLE_AFTER_MINUTES = 15
+#: The SSE stream sends a comment this often so proxies keep the connection
+#: open and a dead link is noticed quickly.
+STREAM_PING_SECONDS = 20
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,7 @@ class AppContext:
     sessions: SessionManager
     approvals: ApprovalManager
     activity: ActivityManager
+    input: OpencodeInput
     watcher: TranscriptWatcher | None = None
     started_at: datetime = field(default_factory=utcnow)
 
@@ -140,6 +147,7 @@ async def build_context(
         sessions=sessions,
         approvals=approvals,
         activity=activity,
+        input=OpencodeInput(),
         watcher=watcher,
     )
 
@@ -463,6 +471,175 @@ def create_app(
                 events=batch,
             )
         return {"received": len(events), "inserted": inserted}
+
+    # --- session input (D-026) ----------------------------------------------
+
+    @app.post(
+        "/v1/sessions/{session_id}/input",
+        dependencies=auth,
+    )
+    async def send_session_input(
+        session_id: str,
+        body: SessionInputRequest,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """Send a prompt into a running agent session from the phone.
+
+        Only OpenCode sessions: the prompt is delivered through OpenCode's
+        background service (the same one the desktop TUI uses), so the turn
+        runs on the desktop and the transcript reader carries it back to the
+        phone. Delivery is fire-and-forget — the endpoint returns as soon as
+        the prompt is queued, and the reply streams in through the chat.
+        """
+        summary = await ctx.sessions.summary(session_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        if summary.agent_type is not AgentType.OPENCODE:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"input is not supported for {summary.agent_type.value} "
+                    "sessions yet"
+                ),
+            )
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="empty prompt")
+        if ctx.input.in_flight(session_id):
+            raise HTTPException(
+                status_code=409,
+                detail="a prompt is already running in this session",
+            )
+        try:
+            ctx.input.submit(session_id, text)
+        except InputUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
+        await ctx.audit.write(
+            actor="phone",
+            action="input.sent",
+            subject=session_id,
+            detail={
+                "agent_type": AgentType.OPENCODE.value,
+                "text": redact_text(text),
+            },
+        )
+        return {"queued": True, "session_id": session_id}
+
+    # --- live stream (D-026) -------------------------------------------------
+
+    @app.get("/v1/stream", dependencies=auth)
+    async def stream_changes(
+        session_id: str | None = Query(
+            default=None, help="only report changes for this session"
+        ),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> StreamingResponse:
+        """Server-sent events: one ``change`` notice per ingest.
+
+        The events carry only *what* changed — the client refetches through
+        the normal endpoints — so the stream stays tiny and every existing
+        auth, redaction and tail rule still applies to the data.
+        """
+
+        async def notices() -> AsyncIterator[str]:
+            queue = ctx.activity.subscribe()
+            try:
+                yield ": connected\n\n"
+                while True:
+                    try:
+                        notice = await asyncio.wait_for(
+                            queue.get(), timeout=STREAM_PING_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+                        continue
+                    if session_id is not None and notice["session_id"] != session_id:
+                        continue
+                    yield f"event: change\ndata: {json.dumps(notice)}\n\n"
+            finally:
+                ctx.activity.unsubscribe(queue)
+
+        return StreamingResponse(
+            notices(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # --- installable app (PWA shell) ------------------------------------------
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest() -> dict[str, Any]:
+        """Enough manifest for Add to Home Screen / standalone windows."""
+        return {
+            "name": "AgentLink",
+            "short_name": "AgentLink",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#0d1017",
+            "theme_color": "#0d1017",
+            "description": "Monitor and steer your coding agents from your phone.",
+            "icons": [
+                {
+                    "src": "/icon.svg",
+                    "sizes": "any",
+                    "type": "image/svg+xml",
+                    "purpose": "any",
+                },
+            ],
+        }
+
+    @app.get("/icon.svg", include_in_schema=False)
+    async def icon() -> PlainTextResponse:
+        return PlainTextResponse(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+                '<rect width="512" height="512" rx="96" fill="#0d1017"/>'
+                '<rect x="96" y="96" width="320" height="120" rx="24" fill="#539bf5"/>'
+                '<rect x="96" y="260" width="200" height="60" rx="18" fill="#58d6e0"/>'
+                '<rect x="96" y="352" width="320" height="64" rx="18" fill="#3fb950"/>'
+                "</svg>"
+            ),
+            media_type="image/svg+xml",
+        )
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> PlainTextResponse:
+        """Cache the shell, never the API.
+
+        The page contains no secrets (the token lives in localStorage), so
+        serving it offline is safe; every ``/v1`` request bypasses the cache
+        entirely so decisions and transcripts are always live.
+        """
+        return PlainTextResponse(
+            (
+                "const SHELL = '/';\n"
+                "self.addEventListener('install', (e) => {\n"
+                "  e.waitUntil(caches.open('agentlink-shell').then((c) => c.add(SHELL)));\n"
+                "  self.skipWaiting();\n"
+                "});\n"
+                "self.addEventListener('activate', (e) => {\n"
+                "  e.waitUntil(self.clients.claim());\n"
+                "});\n"
+                "self.addEventListener('fetch', (e) => {\n"
+                "  const url = new URL(e.request.url);\n"
+                "  if (url.pathname.startsWith('/v1')) return;  // never cache data\n"
+                "  if (e.request.mode !== 'navigate') return;\n"
+                "  e.respondWith(\n"
+                "    caches.open('agentlink-shell').then((cache) =>\n"
+                "      cache.match(SHELL).then((cached) =>\n"
+                "        fetch(SHELL).then((fresh) => {\n"
+                "          cache.put(SHELL, fresh.clone());\n"
+                "          return fresh;\n"
+                "        }).catch(() => cached)\n"
+                "      )\n"
+                "    )\n"
+                "  );\n"
+                "});\n"
+            ),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
 
     # --- status / mode ----------------------------------------------------
 

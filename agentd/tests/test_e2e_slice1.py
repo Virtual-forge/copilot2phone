@@ -145,6 +145,57 @@ def test_sessions_do_not_cross_contaminate(live_daemon):
     assert denied["code"] == 2
 
 
+# --- live stream (D-026) ---------------------------------------------------
+
+
+def test_stream_pushes_change_notices(live_daemon):
+    """SSE over a real socket: an ingest anywhere wakes the stream with a
+    tiny notice, and the data itself still comes from the normal endpoints."""
+    port = live_daemon
+    base = f"http://127.0.0.1:{port}"
+
+    def post_event() -> None:
+        httpx.post(
+            f"{base}/v1/events",
+            headers=auth_headers(),
+            json=[
+                {
+                    "agent_type": "codex",
+                    "session_id": "stream-e2e",
+                    "workspace_path": WORKSPACE,
+                    "kind": "user_message",
+                    "summary": "hi",
+                    "text": "hi",
+                    "role": "user",
+                }
+            ],
+            timeout=5.0,
+        )
+
+    with httpx.Client(
+        base_url=base, headers=auth_headers(), timeout=15.0
+    ) as client:
+        with client.stream("GET", "/v1/stream") as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+
+            text = ""
+            posted = False
+            for chunk in response.iter_raw():
+                text += chunk.decode("utf-8", errors="replace")
+                # the stream is subscribed once the greeting arrives: only
+                # then can a notice be guaranteed to reach it
+                if not posted and ": connected" in text:
+                    posted = True
+                    threading.Thread(target=post_event).start()
+                if "event: change" in text:
+                    break
+            assert posted, "the stream never greeted"
+
+    assert "event: change" in text
+    assert '"session_id": "stream-e2e"' in text
+
+
 # --- fail closed ----------------------------------------------------------
 
 

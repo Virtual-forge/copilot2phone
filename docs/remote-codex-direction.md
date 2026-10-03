@@ -124,7 +124,8 @@ Either way:
 
 | # | Probe | Answers |
 |---|---|---|
-| P0-11 | OpenCode server: `opencode serve` + `opencode api` — the operation list, the session/prompt call, and whether a server client and the TUI can drive one session concurrently | whether Tier 3 for OpenCode is a thin proxy |
+| P0-11 | OpenCode server: `opencode serve` + `opencode api` — the operation list, the session/prompt call, and whether a server client and the TUI can drive one session concurrently | **answered (2026-10-03, D-026):** the background service accepts prompts via `opencode run --session <id>` (verified into a real session); the HTTP API needs the pairing token (`opencode pair` → `/auth/connect/<code>` → `{token}`) — that's M1 of `mobile-app-plan.md` |
+| P0-12 | Pair once, fetch `/openapi.json` with the token, catalogue operations (abort/interrupt, create session, attachments) and the token's lifetime | whether the CLI shim can be replaced by a native client |
 | P0-9 | Codex surfaces: `codex --help`, `app-server` / `mcp` subcommands | whether Tier 3(a) exists in the installed version — partially answered: the CLI is not installed; the VS Code extension bundles the core |
 | P0-10 | Resume surface: does `codex resume` (or the extension) accept a prompt non-interactively, and does the resumed rollout reuse the session id? | whether Tier 3(c) can be built cheaply |
 | P0-1 / P0-2 | The still-blank hook contract tables (`docs/phase0-findings.md`) | how reliably the Tier-2 deny-reason channel reaches the model |

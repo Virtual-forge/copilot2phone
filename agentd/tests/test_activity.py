@@ -305,3 +305,31 @@ async def test_stale_sessions_go_idle(ctx):
     changed = await ctx.db.mark_stale_sessions_idle(iso(utcnow() - timedelta(minutes=15)))
     assert changed == 1
     assert (await ctx.sessions.summary("s1")).state == "idle"
+
+
+# --- live change notifications (D-026) --------------------------------------
+
+
+async def test_ingest_wakes_stream_subscribers(ctx):
+    """Every ingest nudges the live streams: tiny notices, no data."""
+    queue = ctx.activity.subscribe()
+    try:
+        await ingest(
+            ctx,
+            [ev(ActivityKind.USER_MESSAGE, summary="hi", event_id="wake:1")],
+        )
+        notice = queue.get_nowait()
+        assert notice == {"agent_type": "codex", "session_id": "s1"}
+
+        # a quiet second ingest wakes again; unsubscribed queues hear nothing
+        quiet = ctx.activity.subscribe()
+        ctx.activity.unsubscribe(queue)
+        await ingest(
+            ctx,
+            [ev(ActivityKind.USER_MESSAGE, summary="again", event_id="wake:2")],
+        )
+        assert queue.empty()
+        assert quiet.get_nowait() == {"agent_type": "codex", "session_id": "s1"}
+        ctx.activity.unsubscribe(quiet)
+    finally:
+        ctx.activity.unsubscribe(queue)

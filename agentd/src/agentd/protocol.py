@@ -154,6 +154,12 @@ class DecisionRequest(BaseModel):
     decided_by: str = "sim"
 
 
+class SessionInputRequest(BaseModel):
+    """A prompt to inject into a running agent session (D-026)."""
+
+    text: str
+
+
 class SessionRecord(BaseModel):
     session_id: str
     agent_type: AgentType

@@ -36,9 +36,10 @@ const vm = require("vm");
 const src = fs.readFileSync(process.argv[2], "utf8");
 const noop = () => {};
 const stubEl = () => ({
-  classList: { add: noop, remove: noop, contains: () => false },
+  classList: { add: noop, remove: noop, contains: () => false, toggle: noop },
   addEventListener: noop, appendChild: noop, querySelector: () => null,
-  style: {}, innerHTML: "", textContent: "", className: "", disabled: false
+  style: {}, innerHTML: "", textContent: "", className: "", disabled: false,
+  value: "", dataset: {}
 });
 
 const sandbox = {
