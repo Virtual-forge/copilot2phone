@@ -86,3 +86,104 @@ Append-only. Newest at the bottom. Each entry: what was decided, why, and where 
 **Spec:** §14 Phase 1 (demo), §7 (transport, deferred to slice 2).
 **Implemented:** `agentd/src/agentd/tunnel.py`, `agentd run --tunnel`, `agentd tunnel`, `agentd doctor`.
 
+## D-016 — Chat comes from the agent's own transcript files, not the hook
+
+**Decision:** The `PreToolUse` hook is the *gate*; the agent's on-disk transcript is the *monitor*. Chat turns, reasoning and tool results are read from each agent's own history files by a new transcript subsystem (`agentd/src/agentd/transcripts/`), polled by `agentd/src/agentd/watcher.py`. The hook keeps doing only what it can: gating tool calls.
+
+**Why:** A `PreToolUse` hook only ever sees tool calls. User prompts, assistant text, reasoning and tool *outputs* never pass through it, so a chat view built on the hook alone is impossible. Both agents already persist a complete transcript, so reading it is the only way to show the conversation without changing how the agents run.
+
+**Consequences:** The daemon now reads files outside its own state directory. Readers are strictly read-only and never write to the agent's files. Codex is read from `~/.codex/sessions/**/rollout-*.jsonl` (thread names from `~/.codex/session_index.jsonl`); Cline from `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/`. Both locations are overridable via `CODEX_HOME` / `CLINE_TASKS_DIR` for tests. The Cline reader is written against the documented `api_conversation_history.json` / `ui_messages.json` shapes and has not yet been verified against a real task directory on this machine — it is tolerant and degrades to "no transcript" rather than failing.
+
+**Spec:** §1.2.7, §12, §18.3.
+**Implemented:** `agentd/src/agentd/transcripts/{base,codex,cline}.py`, `agentd/src/agentd/watcher.py`.
+
+## D-017 — One activity stream; the chat is a filtered view of it
+
+**Decision:** Every session event — chat turns, reasoning, tool calls, tool results, approvals, lifecycle — is stored as one `ActivityEvent` in the existing `activity_events` table, with a monotonic `seq` per `(agent_type, session_id)`. The chat view is the subset whose `kind` is in `CHAT_KINDS`; the activity feed is all of them. No separate `messages` table.
+
+**Why:** A second table would duplicate every row and force a second sequence space, so ordering between "the chat" and "the feed" could disagree. One table means one ordering, one retention rule (D-006) and one ingest path. `activity_events` already existed in the schema and was unused.
+
+**Consequences:** `activity_events` gained `role` and `text` columns; `sessions` gained `title`, `source`, `last_activity_at`, `message_count` and `last_seq`. `Database.migrate()` now runs an idempotent `_ensure_columns()` pass, because `CREATE TABLE IF NOT EXISTS` never alters an existing table.
+
+**Spec:** §12.1, §12.2, §8.1.
+**Implemented:** `agentd/src/agentd/activity.py`, `agentd/src/agentd/db.py`, `agentd/src/agentd/protocol.py`.
+
+## D-018 — Transcript ingestion is idempotent, incremental and best-effort
+
+**Decision:** Every transcript record maps to a deterministic `event_id` (`<agent>:<session>:<index>`), and `index` is the record's position within the *session*, not within one file: when a Codex thread is resumed into a new rollout file that keeps the same session id, the reader merges the files (oldest first) and numbers their records across the concatenation. The scan is incremental in both directions: an in-memory fingerprint (mtime + size per file) skips untouched files within a daemon run, and a per-file high-water mark persisted in `transcript_state` (`pos` — a byte offset just past the last complete line — plus `records`) means a changed file is read from that offset and a restart reads only tails. A whole ingest batch is written in one transaction, and sequence numbers are reserved in a single `UPDATE … RETURNING`, so two concurrent batches can never draw the same `seq`. A malformed line, file or directory is skipped and logged; it never aborts a scan or the daemon.
+
+**Why:** The watcher re-reads files that agents are actively appending to, and restarts re-read everything. Without stable ids the chat would duplicate on every poll; without the fingerprint check a 600-record rollout would be re-parsed every two seconds; without the marks a restart re-read all of it, and the previous per-record commit cost ~4 ms of fsync per line — a changed 1476-record file re-wrote the whole file through SQLite every two seconds (6.4 s of DB work for an empty tail). The per-*file* index was also wrong on its own: Codex writes a new file on every resume (with no replay of the earlier turns), so two files produced the same ids and the shorter resume file overwrote the original's rows — most visibly flipping the original's record at the resume file's last index to that file's `task_complete`.
+
+**Consequences:** A stored event is refreshed from its source only when its file is *fully* re-read — the first scan, a shrunk file, or a bump of `READER_VERSION` (which is how a change to a reader's mapping now takes effect, instead of implicitly on every scan); a tail read inserts only new rows and burns no `seq` (`sessions.last_seq` stays equal to the number of ingested events). The mark only advances past newline-terminated lines, so a line the agent is mid-writing is re-read next scan — torn appends are never skipped, only delayed. A file that shrank, or marks from an older `READER_VERSION`, invalidate the whole session's marks so the records are renumbered once instead of stored twice. Ordering the files by the session's own start timestamps (not mtime) keeps the oldest file in the low index range, which is also where rows written by the first release already lived: a re-scan reconciled them in place rather than orphaning them. Because the index spans files, appending to a file that is *not* the group's last would shift the later files' ids; Codex only ever appends to the active (last) file, so this does not arise in practice. Cline reads two small JSON files per task, so its reader reports no marks and is always re-read in full.
+
+**Spec:** §12.2, §12.4.
+**Implemented:** `agentd/src/agentd/watcher.py`, `agentd/src/agentd/activity.py`.
+
+## D-019 — The phone UI is session-centric
+
+**Decision:** The home screen is a list of sessions (agent, title, workspace, message count, pending count, last activity). Tapping one opens a detail view with `Chat | Activity | Approvals` tabs. The approval card and its press-and-hold rule (D-004) are unchanged; they now also appear inside the session they belong to. Routing is hash-based (`#/s/<session_id>`) so the phone's back gesture works.
+
+**Why:** §11.3 already specified an agent space with `Approvals | Activity | Changes | Files`, and §12 a live activity stream. A flat approval inbox does not scale past a handful of pending items and gives no way to see what an agent actually did. Sessions are the natural unit: they are already the partitioning key (D-010) and the thing a user thinks in.
+
+**Consequences:** `GET /v1/sessions` now returns enriched `SessionSummary` objects (it previously returned bare `SessionRecord`s; the `session_id` and `agent_type` fields are unchanged, so existing callers keep working). New endpoints: `GET /v1/sessions/{id}`, `GET /v1/sessions/{id}/messages`, `GET /v1/sessions/{id}/events`, and `POST /v1/events` for hooks and adapters to post activity. The `Changes` and `Files` tabs from §11.3 are still to come (slice C).
+
+**Spec:** §11.3, §11.4, §12, §12.3.
+**Implemented:** `agentd/src/agentd/webui.py`, `agentd/src/agentd/local_api.py`.
+
+## D-020 — Approvals are inline in the chat timeline, not a separate view
+
+**Decision:** The Chat tab renders the whole activity stream, not the `CHAT_KINDS` subset. The two events that describe one approval (`approval_requested`, `approval_decided`) fold into a single card that sits at the position of the *request* and shows the outcome — pending, allowed, denied, expired or cancelled. A lone `approval_decided` (a policy auto-allow or auto-deny, which never had a request) stays feed-only and never becomes a chat card. The `Approvals` tab remains as the "what needs me right now" inbox.
+
+**Why:** The user's mental model is a conversation, and an approval is a turn in it: the agent asks, the human answers, the agent proceeds. Splitting that across tabs loses the causal thread — you cannot see *which* tool call the card belongs to. D-017 already put approvals in the same stream as chat, so interleaving them is a rendering change, not a data change.
+
+**Consequences:** The chat orders by `ts` with `seq` as the tiebreak, because the watcher ingests transcript files in batches: an approval recorded live can otherwise receive a lower `seq` than the tool calls that preceded it. The `approval_requested` detail now carries `command`, `paths`, `cwd`, `reasons`, `expires_at` and `workspace_path`, and `approval_decided` carries `state` and `decided_by`, so a card is self-contained — after a decision the record is no longer pending, so a join against `/v1/approvals` would lose the command text. `GET /v1/approvals` gained a `session_id` filter, and a card's state is taken from the approval record when one exists, because the record survives a restart, a sweep and a truncated event window. Every approval *record* renders as a card, positioned by its request time, even when the matching request event is missing — the record is the only trace of a decision taken by a daemon that predates activity recording, across a restart, or outside the fetched window — while a lone `approval_decided` *event* (a policy auto-allow or auto-deny, which never had a record) stays feed-only and never becomes a chat card. `cancel_all()` and `sweep_expired()` now record a decision event; previously they did not, which would have left a card stuck on "pending" forever after a restart. A gated tool call still shows both its `tool_call` bubble and its card, because the hook's `Action` carries no call id to join them on.
+
+**Spec:** §11.3, §12.1, §12.3.
+**Implemented:** `agentd/src/agentd/webui.py`, `agentd/src/agentd/approvals.py`, `agentd/src/agentd/db.py`, `agentd/src/agentd/local_api.py`.
+
+
+## D-021 — The chat is the conversation, not the harness
+
+**Decision:** `ActivityKind` gains `TASK_STARTED`, `TASK_FINISHED` and `TOOL_PLUMBING`, and none of them is in `CHAT_KINDS`. The Codex reader maps `task_started` / `task_complete` / `turn_aborted` to the two lifecycle kinds, and maps the `exec` / `wait` unified-exec calls and their outputs to `TOOL_PLUMBING`. They stay in the activity feed, which is the unfiltered stream.
+
+**Why:** A real Codex session showed 133 events of which 94 were harness mechanics — 24 turn markers and 70 `exec` / `wait` calls and "Script running…" results — so the chat was mostly `task started`, `task complete`, `exec` and `wait` bubbles with the actual conversation buried between them. Those events are the agent runtime talking to itself: `exec` runs a generated JavaScript snippet with the real command buried inside it, and `wait` only polls the cell it started, so one shell command becomes a burst of calls. D-017 already said the chat is the subset of the stream whose kind is in `CHAT_KINDS`; the vocabulary was simply too coarse to express the distinction, because `NOTE` conflated "a system note worth showing" with "a turn boundary" and `TOOL_CALL` conflated "a tool the user cares about" with "exec polling". `task_started` / `task_finished` are also the names SPEC §12.1 already uses.
+
+**Consequences:** The kinds are additive and `kind` is stored as text with no `CHECK` constraint, so no migration is needed. `message_count` and `GET /v1/sessions/{id}/messages` shrink accordingly, because both filter on `CHAT_KINDS`. The classification is derived from the transcript, so it is only applied on ingest: rows already stored keep the kind they were written with, and a session ingested before this change has to be re-ingested to pick it up. A tool result carries only a `call_id`, so the reader remembers each call's name while it walks the file in order to classify the matching output.
+
+**Spec:** §12.1, §12.2.
+**Implemented:** `agentd/src/agentd/protocol.py`, `agentd/src/agentd/transcripts/codex.py`.
+
+## D-022 — The chat opens at the newest turn and pins pending cards
+
+**Decision:** Opening a session (or switching back to the Chat tab) scrolls to the bottom of the transcript. A card whose state is still `pending` sorts after every message and every decided card, so it sits at the bottom of the chat. A decided card keeps D-020's position at its request.
+
+**Why:** The chat reads oldest-first, so a session with any history opened on its first message and the user had to scroll the whole transcript to reach what was happening now. And an approval that still needs an answer is the one thing on the screen that is time-critical: leaving it at its request position means it can be hundreds of bubbles above the fold by the time the user looks.
+
+**Consequences:** The poll only follows along when the user was already near the bottom, so a refresh never yanks them away from what they are reading; a fresh open always scrolls. Pinning is a sort key in the fold, not a separate sticky element, so the card still lives in the conversation and still disappears from the bottom once it is decided.
+
+**Spec:** §11.3, §12.3.
+**Implemented:** `agentd/src/agentd/webui.py`.
+
+## D-023 — The chat window hangs off the newest end and polls incrementally
+
+**Decision:** `GET /v1/sessions/{id}` and the `/messages` / `/events` endpoints accept `tail=1`, which returns the *newest* `limit` rows in ascending order instead of the oldest. The phone opens a session with a tail fetch and then polls with `after_seq` — the parameter the API already had — appending only what arrived. The re-render key is the highest `seq` seen plus the approval states, not the length of the fetched array.
+
+**Why:** The oldest-first window had two failure modes that hid on exactly the sessions a user watches: once a session passed its event limit the API returned the oldest rows (the live end was cut off entirely, defeating D-022), and because the UI keyed its render on the array *length*, that length pinned at the limit and the chat silently froze — new messages stopped rendering while approval cards kept healing from the approvals list, so it read as "stuck". The same full-window fetch every two seconds also shipped the whole timeline, full text bodies included, to a phone on mobile data.
+
+**Consequences:** A poll costs one tiny request when nothing changed and a short append when something did; the window stays anchored to the live end as the session grows. A render that arrives while a high-risk *Hold to allow* press is in flight is deferred until the hold finishes (or fires) instead of destroying the button mid-press; the pending card's countdown ticks on its own 1-second timer instead of freezing between renders. Fetches time out client-side and never overlap. The Activity tab reuses the same newest window (it previously displayed the oldest rows reversed, i.e. the stale end).
+
+**Spec:** §12.3, §12.4.
+**Implemented:** `agentd/src/agentd/local_api.py`, `agentd/src/agentd/webui.py`, `agentd/src/agentd/db.py`.
+
+## D-024 — Config promises are honoured: away, disabled agents, default effect
+
+**Decision:** Three knobs that previously parsed but did nothing are now enforced. Away mode (`POST /v1/away`, `agentd away`) denies `ask` decisions immediately instead of parking the agent for the whole timeout — the hook still fails closed, it just fails fast. `agents.<name>.enabled = false` makes that agent's hooks fail closed on arrival, with an audit entry and no pending row. `[policy] default_effect` (validated to `ask`/`deny`/`allow`) is the effect for actions no rule matched; workspace reads stay allowed outright.
+
+**Why:** A displayed dial that does nothing is worse than no dial: a user who disables an agent believes its tool calls are gated, and one who sets `default_effect = "deny"` believes the machine is locked down. Away mode was settable from three clients and read by `/v1/status` while nothing consumed it.
+
+**Consequences:** Approvals and commands are now stored redacted (S7): `crypto.redact` runs over the card's activity detail and the approval record's action, so the phone shows `Authorization: ***REDACTED***` instead of the secret an agent tried to pass; `action_hash` still hashes the raw action so it stays stable. If the approval row cannot be stored after its request card was written, a `denied` decision event closes the card instead of leaving it pending forever. Two approvals indexes (`(session_id, state)` and `(state, expires_at)`) make the per-session pending count, the per-session approval list and the expiry sweep index lookups instead of full scans, and a housekeeping loop marks quiet sessions idle and applies `[activity] retention_days` (0 disables pruning; pending approvals are never deleted).
+
+**Spec:** §9.3, §9.4, §12.5, §16.1.
+**Implemented:** `agentd/src/agentd/approvals.py`, `agentd/src/agentd/policy.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/local_api.py`, `agentd/src/agentd/db.py`.
+
+

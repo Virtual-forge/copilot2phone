@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import paths
 
@@ -43,7 +43,16 @@ class ActivityConfig(BaseModel):
 
 
 class PolicyConfig(BaseModel):
+    #: Effect for actions no rule matched: "ask" (default), "deny" or "allow".
     default_effect: str = "ask"
+
+    @field_validator("default_effect")
+    @classmethod
+    def _known_effect(cls, value: str) -> str:
+        allowed = {"ask", "deny", "allow"}
+        if value not in allowed:
+            raise ValueError(f"default_effect must be one of {sorted(allowed)}")
+        return value
 
 
 class AgentConfig(BaseModel):
@@ -56,7 +65,11 @@ class AgentsConfig(BaseModel):
     codex: AgentConfig = Field(default_factory=AgentConfig)
 
     def for_agent(self, agent_type: str) -> AgentConfig:
-        return getattr(self, agent_type, AgentConfig())
+        # Never a raw getattr(): ``for_agent("for_agent")`` must not return
+        # this method itself.
+        if agent_type not in ("cline", "codex"):
+            return AgentConfig()
+        return getattr(self, agent_type)
 
 
 class LoggingConfig(BaseModel):

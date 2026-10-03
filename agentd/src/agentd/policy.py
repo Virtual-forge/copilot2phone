@@ -105,14 +105,16 @@ class PolicyEngine:
             reasons.append("path outside workspace")
 
         # Defaults (§9.3): reads inside the workspace are allowed outright;
-        # everything else is asked. A high-risk action is still *asked* so the
-        # phone can press-and-hold (D12) — but it fails closed if unanswered.
+        # everything else follows [policy] default_effect — "ask" out of the
+        # box, "deny" for a machine nobody watches. A high-risk action is
+        # still *asked* so the phone can press-and-hold (D12) — but it fails
+        # closed if unanswered.
         if kind is ToolKind.FILE_READ and not outside:
             effect = Effect.ALLOW
             matched = "default:allow-workspace-read"
         else:
-            effect = Effect.ASK
-            matched = "default:ask"
+            effect = Effect(self._config.policy.default_effect)
+            matched = f"default:{effect.value}"
 
         return PolicyResult(
             effect=effect,

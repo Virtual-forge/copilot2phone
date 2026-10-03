@@ -24,12 +24,19 @@ app = typer.Typer(
 
 def _configure_logging(level: str) -> None:
     """Mirror daemon logs to ``%USERPROFILE%\\.agentlink\\logs\\agentd.log``."""
+    root = logging.getLogger()
+    if any(
+        isinstance(handler, logging.FileHandler)
+        and getattr(handler, "_agentd_owned", False)
+        for handler in root.handlers
+    ):
+        return  # already configured in this process
     paths.ensure_dir(paths.log_dir())
     handler = logging.FileHandler(paths.log_path(), encoding="utf-8")
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)-7s %(name)s %(message)s")
     )
-    root = logging.getLogger()
+    handler._agentd_owned = True  # noqa: SLF001 - marker for the guard above
     root.setLevel(level.upper())
     root.addHandler(handler)
 

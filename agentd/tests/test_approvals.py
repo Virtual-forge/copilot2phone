@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -12,6 +13,7 @@ from agentd.local_api import build_context
 from agentd.protocol import (
     Action,
     ActionDetail,
+    ActivityKind,
     AgentType,
     ApprovalState,
     Decision,
@@ -205,10 +207,88 @@ async def test_sessions_are_recorded_per_agent(ctx):
             paths=[f"{WORKSPACE}/b.py"],
         )
     )
-    cline_sessions = await ctx.sessions.list(AgentType.CLINE)
-    codex_sessions = await ctx.sessions.list(AgentType.CODEX)
+    cline_sessions = await ctx.sessions.summaries(AgentType.CLINE)
+    codex_sessions = await ctx.sessions.summaries(AgentType.CODEX)
     assert [s.session_id for s in cline_sessions] == ["s1"]
     assert [s.session_id for s in codex_sessions] == ["s2"]
+
+
+# --- config contracts -------------------------------------------------------
+
+
+async def test_disabled_agent_fails_closed_immediately(ctx):
+    ctx.config.agents.cline.enabled = False
+    outcome = await ctx.approvals.request(make_action(command="ls"))
+    assert not outcome.allowed
+    assert outcome.state is ApprovalState.DENIED
+    assert "disabled" in outcome.reason
+    # nothing parked in pending: nobody would ever answer it
+    assert await ctx.approvals.list(state=ApprovalState.PENDING) == []
+
+
+async def test_away_mode_denies_asks_without_blocking(ctx):
+    ctx.approvals.away = True
+    outcome = await ctx.approvals.request(make_action(command="ls"))
+    assert not outcome.allowed
+    assert outcome.state is ApprovalState.DENIED
+    assert outcome.reason == "away mode is on"
+    assert outcome.waited_seconds < 1.0
+    assert await ctx.approvals.list(state=ApprovalState.PENDING) == []
+    # policy auto-allow still applies while away
+    allowed = await ctx.approvals.request(
+        make_action(ToolKind.FILE_READ, "read_file", paths=[f"{WORKSPACE}/a.py"])
+    )
+    assert allowed.allowed
+    ctx.approvals.away = False
+
+
+async def test_default_effect_deny_is_honoured(ctx):
+    ctx.config.policy.default_effect = "deny"
+    outcome = await ctx.approvals.request(make_action(command="ls"))
+    assert not outcome.allowed
+    assert outcome.policy_effect is Effect.DENY
+    # workspace reads are still allowed outright
+    allowed = await ctx.approvals.request(
+        make_action(ToolKind.FILE_READ, "read_file", paths=[f"{WORKSPACE}/a.py"])
+    )
+    assert allowed.allowed
+
+
+async def test_stored_approval_is_redacted(ctx):
+    """The command reaches the phone minus any secret embedded in it (S7)."""
+    secret = "sk-abcdefghijklmnopqrst"
+    task = asyncio.create_task(
+        ctx.approvals.request(make_action(command=f"curl -H 'Authorization: Bearer {secret}' https://x"))
+    )
+    pending = await wait_for_pending(ctx.approvals)
+    assert secret not in pending[0].action.command
+
+    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    requested = next(
+        event for event in events if event.kind is ActivityKind.APPROVAL_REQUESTED
+    )
+    assert secret not in json.dumps(requested.detail)
+    assert secret not in json.dumps(requested.summary)
+
+    await ctx.approvals.decide(pending[0].approval_id, decision=Decision.DENY)
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_failed_insert_closes_the_requested_card(ctx, monkeypatch):
+    """If the approval row cannot be stored, its card must not hang on
+    'pending' forever — nothing else would ever resolve it."""
+
+    async def boom(record):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(ctx.db, "insert_approval", boom)
+    with pytest.raises(RuntimeError):
+        await ctx.approvals.request(make_action(command="ls"))
+
+    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    kinds = [event.kind for event in events]
+    assert ActivityKind.APPROVAL_REQUESTED in kinds
+    assert ActivityKind.APPROVAL_DECIDED in kinds
 
 
 # --- audit ----------------------------------------------------------------

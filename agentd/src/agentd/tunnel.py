@@ -164,11 +164,13 @@ def start(
     except OSError as exc:  # pragma: no cover - depends on the host
         handle.close()
         raise TunnelError(f"could not start ngrok: {exc}") from exc
+    # The child inherited its own copy; the parent's is no longer needed and
+    # must not leak for the lifetime of the daemon.
+    handle.close()
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            handle.close()
             raise TunnelError(
                 f"ngrok exited immediately (code {process.returncode}); "
                 f"see {target}"
@@ -180,5 +182,4 @@ def start(
         time.sleep(0.25)
 
     process.terminate()
-    handle.close()
     raise TunnelError(f"ngrok did not report a public URL within {timeout:.0f}s")

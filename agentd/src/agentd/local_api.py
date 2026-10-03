@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import secrets
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from . import __version__, paths, webui
+from .activity import ActivityManager, IncomingEvent
 from .approvals import ApprovalConflict, ApprovalManager, ApprovalNotFound
 from .audit import AuditLog
 from .config import Config, load_config
@@ -28,18 +30,28 @@ from .db import Database
 from .policy import PolicyEngine
 from .protocol import (
     Action,
+    ActivityEvent,
+    ActivityEventIn,
     AgentType,
     ApprovalOutcome,
     ApprovalRecord,
     ApprovalState,
     DecisionRequest,
-    SessionRecord,
+    MessageRecord,
+    MessageRole,
+    SessionDetail,
+    SessionSummary,
     iso,
     utcnow,
 )
 from .sessions import SessionManager
+from .watcher import TranscriptWatcher
 
 SWEEP_INTERVAL_SECONDS = 15
+HOUSEKEEPING_INTERVAL_SECONDS = 3600
+#: A session whose transcripts have been quiet for this long stops showing the
+#: "active" badge (and stops pretending to be running).
+SESSION_IDLE_AFTER_MINUTES = 15
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +68,22 @@ class AppContext:
     audit: AuditLog
     sessions: SessionManager
     approvals: ApprovalManager
+    activity: ActivityManager
+    watcher: TranscriptWatcher | None = None
     started_at: datetime = field(default_factory=utcnow)
-    away: bool = False
+
+
+def _token_matches(presented: str, expected: str) -> bool:
+    """Constant-time token comparison that survives non-ASCII input.
+
+    Header values arrive latin-1-decoded, so ``compare_digest`` on the str
+    form would raise ``TypeError`` and turn a bad token into a 500. Bytes
+    never do.
+    """
+    return secrets.compare_digest(
+        presented.encode("utf-8", "surrogatepass"),
+        expected.encode("utf-8"),
+    )
 
 
 def load_or_create_token(path: Path | None = None) -> str:
@@ -69,7 +95,14 @@ def load_or_create_token(path: Path | None = None) -> str:
             return existing
     token = new_token()
     paths.ensure_dir(target.parent)
-    target.write_text(token, encoding="utf-8")
+    # 0600: on POSIX the token must not be world-readable. Windows ignores the
+    # mode and relies on the user profile's ACLs.
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+    except AttributeError:  # pragma: no cover - exotic platform
+        target.write_text(token, encoding="utf-8")
     return token
 
 
@@ -88,13 +121,16 @@ async def build_context(
     policy = PolicyEngine(cfg)
     audit = AuditLog(database)
     sessions = SessionManager(database)
+    activity = ActivityManager(db=database, sessions=sessions)
     approvals = ApprovalManager(
         db=database,
         config=cfg,
         policy=policy,
         audit=audit,
         sessions=sessions,
+        activity=activity,
     )
+    watcher = TranscriptWatcher(activity=activity, sessions=sessions, db=database)
     return AppContext(
         config=cfg,
         db=database,
@@ -103,6 +139,8 @@ async def build_context(
         audit=audit,
         sessions=sessions,
         approvals=approvals,
+        activity=activity,
+        watcher=watcher,
     )
 
 
@@ -121,6 +159,28 @@ async def _sweep_loop(ctx: AppContext) -> None:
         await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
         with contextlib.suppress(Exception):
             await ctx.approvals.sweep_expired()
+
+
+async def _housekeeping_loop(ctx: AppContext) -> None:
+    """Slow periodic cleanup: idle badges and ``retention_days`` pruning."""
+    while True:
+        await asyncio.sleep(HOUSEKEEPING_INTERVAL_SECONDS)
+        with contextlib.suppress(Exception):
+            await _housekeeping(ctx)
+
+
+async def _housekeeping(ctx: AppContext) -> None:
+    idle_after = iso(utcnow() - timedelta(minutes=SESSION_IDLE_AFTER_MINUTES))
+    await ctx.db.mark_stale_sessions_idle(idle_after)
+
+    retention_days = ctx.config.activity.retention_days
+    if retention_days > 0:
+        cutoff = iso(utcnow() - timedelta(days=retention_days))
+        stats = await ctx.db.prune_before(cutoff)
+        if any(stats.values()):
+            logger.info(
+                "retention pruned %s", ", ".join(f"{k}={v}" for k, v in stats.items())
+            )
 
 
 def create_app(
@@ -161,12 +221,26 @@ def create_app(
                 stale,
             )
         sweeper = asyncio.create_task(_sweep_loop(context))
+        housekeeper = asyncio.create_task(_housekeeping_loop(context))
+        watcher_task: asyncio.Task[None] | None = None
+        if context.watcher is not None:
+            # The first scan runs inside the watcher task, not here: startup
+            # must not block the API on re-reading months of transcripts, and
+            # thanks to the persisted high-water marks a restart only reads
+            # the tails anyway.
+            watcher_task = asyncio.create_task(context.watcher.run())
         try:
             yield
         finally:
             sweeper.cancel()
+            housekeeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sweeper
+                await housekeeper
+            if watcher_task is not None:
+                watcher_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher_task
             if owned is not None:
                 cancelled = await owned.approvals.cancel_all()
                 if cancelled:
@@ -195,7 +269,7 @@ def create_app(
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="missing bearer token")
         presented = authorization[len("Bearer ") :].strip()
-        if not secrets.compare_digest(presented, context.token):
+        if not _token_matches(presented, context.token):
             raise HTTPException(status_code=401, detail="invalid token")
 
     auth = [Depends(require_token)]
@@ -231,12 +305,13 @@ def create_app(
     )
     async def list_approvals(
         agent_type: AgentType | None = Query(default=None),
+        session_id: str | None = Query(default=None),
         state: ApprovalState | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=1000),
         ctx: AppContext = Depends(get_ctx),
     ) -> list[ApprovalRecord]:
         return await ctx.approvals.list(
-            agent_type=agent_type, state=state, limit=limit
+            agent_type=agent_type, session_id=session_id, state=state, limit=limit
         )
 
     @app.get(
@@ -274,12 +349,120 @@ def create_app(
 
     # --- sessions ---------------------------------------------------------
 
-    @app.get("/v1/sessions", response_model=list[SessionRecord], dependencies=auth)
+    @app.get("/v1/sessions", response_model=list[SessionSummary], dependencies=auth)
     async def list_sessions(
         agent_type: AgentType | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=500),
         ctx: AppContext = Depends(get_ctx),
-    ) -> list[SessionRecord]:
-        return await ctx.sessions.list(agent_type)
+    ) -> list[SessionSummary]:
+        summaries = await ctx.sessions.summaries(agent_type, limit)
+        # One query for every session's pending count, not one per session —
+        # the home screen polls this every two seconds.
+        counts = await ctx.db.pending_counts_by_session()
+        for summary in summaries:
+            summary.pending_approvals = counts.get(summary.session_id, 0)
+        return summaries
+
+    @app.get(
+        "/v1/sessions/{session_id}", response_model=SessionDetail, dependencies=auth
+    )
+    async def get_session(
+        session_id: str,
+        limit: int = Query(default=300, ge=1, le=2000),
+        tail: bool = Query(default=False, help="Return the newest rows, not the oldest"),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> SessionDetail:
+        summary = await ctx.sessions.summary(session_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        summary.pending_approvals = await ctx.db.count_pending_for_session(session_id)
+        messages = await ctx.activity.messages(
+            agent_type=summary.agent_type, session_id=session_id,
+            limit=limit, tail=tail,
+        )
+        events = await ctx.activity.events(
+            agent_type=summary.agent_type, session_id=session_id,
+            limit=limit, tail=tail,
+        )
+        return SessionDetail(**summary.model_dump(), messages=messages, events=events)
+
+    @app.get(
+        "/v1/sessions/{session_id}/messages",
+        response_model=list[MessageRecord],
+        dependencies=auth,
+    )
+    async def list_session_messages(
+        session_id: str,
+        after_seq: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=2000),
+        tail: bool = Query(default=False, help="Return the newest rows, not the oldest"),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> list[MessageRecord]:
+        summary = await ctx.sessions.summary(session_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return await ctx.activity.messages(
+            agent_type=summary.agent_type,
+            session_id=session_id,
+            after_seq=after_seq,
+            limit=limit,
+            tail=tail,
+        )
+
+    @app.get(
+        "/v1/sessions/{session_id}/events",
+        response_model=list[ActivityEvent],
+        dependencies=auth,
+    )
+    async def list_session_events(
+        session_id: str,
+        after_seq: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=2000),
+        tail: bool = Query(default=False, help="Return the newest rows, not the oldest"),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> list[ActivityEvent]:
+        summary = await ctx.sessions.summary(session_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return await ctx.activity.events(
+            agent_type=summary.agent_type,
+            session_id=session_id,
+            after_seq=after_seq,
+            limit=limit,
+            tail=tail,
+        )
+
+    # --- activity ingest (hooks / adapters) -------------------------------
+
+    @app.post("/v1/events", dependencies=auth)
+    async def ingest_events(
+        events: list[ActivityEventIn],
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """Record activity posted by a hook or adapter. Returns the count."""
+        grouped: dict[tuple[AgentType, str, str], list[IncomingEvent]] = {}
+        for item in events:
+            key = (item.agent_type, item.session_id, item.workspace_path)
+            grouped.setdefault(key, []).append(
+                IncomingEvent(
+                    kind=item.kind,
+                    summary=item.summary,
+                    text=item.text,
+                    role=item.role,
+                    ts=item.ts,
+                    detail=item.detail,
+                    event_id=item.event_id,
+                )
+            )
+        inserted = 0
+        for (agent_type, session_id, workspace_path), batch in grouped.items():
+            inserted += await ctx.activity.ingest(
+                agent_type=agent_type,
+                session_id=session_id,
+                workspace_path=workspace_path,
+                events=batch,
+            )
+        return {"received": len(events), "inserted": inserted}
 
     # --- status / mode ----------------------------------------------------
 
@@ -290,7 +473,7 @@ def create_app(
             "version": __version__,
             "started_at": iso(ctx.started_at),
             "uptime_seconds": (now - ctx.started_at).total_seconds(),
-            "away": ctx.away,
+            "away": ctx.approvals.away,
             "waiting": ctx.approvals.waiting_count,
             "pending": await ctx.approvals.pending_counts(),
             "db_path": str(ctx.db.path),
@@ -307,14 +490,16 @@ def create_app(
     async def set_away(
         enabled: bool = Query(...), ctx: AppContext = Depends(get_ctx)
     ) -> dict[str, Any]:
-        ctx.away = enabled
+        """Away mode denies asks immediately instead of blocking for the
+        timeout — the hook still fails closed, it just fails fast."""
+        ctx.approvals.away = enabled
         await ctx.audit.write(
             actor="sim",
             action="mode.away",
             subject=None,
             detail={"enabled": enabled},
         )
-        return {"away": ctx.away}
+        return {"away": ctx.approvals.away}
 
     # --- audit ------------------------------------------------------------
 
