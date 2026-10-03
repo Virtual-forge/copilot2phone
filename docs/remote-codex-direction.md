@@ -59,12 +59,33 @@ session correlation, no terminal scraping. Probe P0-9: inspect
 `codex --help` for `app-server` / `mcp` / `proto` subcommands and capture the
 handshake.
 
+**Probe result (2026-10-03):** on this machine Codex runs as the **VS Code
+extension** (`openai.chatgpt` / `openai.codex-audio`); there is no `codex`
+CLI on PATH, and `~/.codex` shows the modern layout (plugins, MCP OAuth
+locks). The extension talks to the bundled core over exactly the app-server
+protocol — so the CLI route means installing the standalone CLI
+(`npm i -g @openai/codex`) and speaking JSON-RPC to it directly.
+
 **(b) Fallback — agentd hosts the session.** `agentd codex` launches Codex in
 a ConPTY (pywinpty on Windows), mirrors the output to the phone, and exposes
 `POST /v1/sessions/{id}/input` writing keystrokes; the phone gets a composer.
 This makes agentd the *host*, which also solves slice-3 hook installation
 (agentd wires its own hooks at spawn) and gives perfect session-id correlation
-instead of payload guessing.
+instead of payload guessing. Note: with the IDE-extension setup the extension
+owns the running session's input, so (b) applies to *new* CLI-hosted sessions,
+not to typing into one already open in VS Code.
+
+**(c) Stepping stone that fits the current setup — phone-queued follow-ups
+via resume.** Codex continues a session through *resume*, and a resumed thread
+reuses the session id and writes a new rollout file — the exact shape the
+transcript layer already merges. So agentd can, without touching any running
+process: park a message typed on the phone, watch the rollout until the turn
+ends, then `codex resume <session_id> "<message>"` (or the extension's
+resume surface) and the message lands in the same conversation, visible on
+both the desktop and the phone. Not real-time injection into a live turn, but
+it is "input into the same session" with a small, safe blast radius and
+works with sessions the IDE owns. Probe P0-10: confirm the installed Codex's
+resume surface and whether a prompt can be passed non-interactively.
 
 Either way:
 
@@ -88,7 +109,8 @@ Either way:
 
 | # | Probe | Answers |
 |---|---|---|
-| P0-9 | Codex surfaces: `codex --help`, `app-server` / `mcp` subcommands | whether Tier 3(a) exists in the installed version |
+| P0-9 | Codex surfaces: `codex --help`, `app-server` / `mcp` subcommands | whether Tier 3(a) exists in the installed version — partially answered: the CLI is not installed; the VS Code extension bundles the core |
+| P0-10 | Resume surface: does `codex resume` (or the extension) accept a prompt non-interactively, and does the resumed rollout reuse the session id? | whether Tier 3(c) can be built cheaply |
 | P0-1 / P0-2 | The still-blank hook contract tables (`docs/phase0-findings.md`) | how reliably the Tier-2 deny-reason channel reaches the model |
 | P0-3 | Hook timeout ceilings | how long input may be buffered before the agent gives up |
 
