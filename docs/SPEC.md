@@ -1,5 +1,10 @@
 # AgentLink — Build Specification v1
 
+> **Superseded in part (2026-10-03, D-025):** Cline is no longer supported; the
+> agents are **Codex** (hook-gated approvals) and **OpenCode** (monitor-only).
+> `docs/decisions.md` is the living design record and wins where this spec and
+> it disagree.
+
 Remote approvals, change review and monitoring for coding agents (**Cline** and **Codex** first) from a phone, with strict multi-agent segregation.
 
 - **Audience:** an autonomous coding agent implementing the whole system, plus a human reviewer.

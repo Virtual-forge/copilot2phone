@@ -6,7 +6,7 @@
     Requires `agentd run` in another terminal.
 
       1. checks the daemon is up
-      2. fires a synthetic Cline hook in the background (it blocks)
+      2. fires a synthetic Codex hook in the background (it blocks)
       3. waits for the approval to appear
       4. approves (or denies) it
       5. prints the hook's response
@@ -38,11 +38,11 @@ catch {
 
 $fakeHook = Join-Path $PSScriptRoot 'fake-hook.ps1'
 
-Write-Host '== 2. firing a synthetic Cline hook (it will block) ==' -ForegroundColor Cyan
+Write-Host '== 2. firing a synthetic Codex hook (it will block) ==' -ForegroundColor Cyan
 Write-Host "   command: $Command" -ForegroundColor DarkGray
 $job = Start-Job -ScriptBlock {
     param($hook, $cmd)
-    & $hook -Agent cline -Tool execute_command -Command $cmd
+    & $hook -Agent codex -Tool shell -Command $cmd
 } -ArgumentList $fakeHook, $Command
 
 Write-Host '== 3. waiting for the approval to appear ==' -ForegroundColor Cyan

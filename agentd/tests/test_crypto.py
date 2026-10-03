@@ -8,10 +8,10 @@ from agentd.protocol import Action, ActionDetail, AgentType, Tool, ToolKind
 
 def make_action(**overrides) -> Action:
     base = {
-        "agent_type": AgentType.CLINE,
+        "agent_type": AgentType.CODEX,
         "session_id": "s1",
         "workspace_path": "C:/work",
-        "tool": Tool(name="execute_command", kind=ToolKind.COMMAND),
+        "tool": Tool(name="shell", kind=ToolKind.COMMAND),
         "action": ActionDetail(summary="rm -rf build/", command="rm -rf build/"),
     }
     base.update(overrides)

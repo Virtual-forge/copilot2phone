@@ -28,7 +28,7 @@ WORKSPACE = "C:/work/project"
 def make_action(
     kind: ToolKind = ToolKind.COMMAND,
     name: str = "execute_command",
-    agent: AgentType = AgentType.CLINE,
+    agent: AgentType = AgentType.CODEX,
     session: str = "s1",
     **detail,
 ) -> Action:
@@ -102,7 +102,7 @@ async def test_command_blocks_until_denied(ctx):
 
 async def test_timeout_expires_and_denies(home):
     config = Config()
-    config.agents.cline.hook_timeout_seconds = 0.2
+    config.agents.codex.hook_timeout_seconds = 0.2
     context = await build_context(config, db_path=home / "timeout.db", token="t")
     try:
         outcome = await context.approvals.request(make_action(command="ls"))
@@ -137,7 +137,7 @@ async def test_deciding_unknown_id_raises(ctx):
 
 async def test_deciding_an_expired_approval_is_a_conflict(home):
     config = Config()
-    config.agents.cline.hook_timeout_seconds = 0.2
+    config.agents.codex.hook_timeout_seconds = 0.2
     context = await build_context(config, db_path=home / "expired.db", token="t")
     try:
         outcome = await context.approvals.request(make_action(command="ls"))
@@ -172,26 +172,26 @@ async def test_cancel_all_fails_closed(ctx):
 
 
 async def test_pending_counts_are_partitioned_by_agent(ctx):
-    cline = asyncio.create_task(ctx.approvals.request(make_action(command="ls")))
-    codex = asyncio.create_task(
+    codex = asyncio.create_task(ctx.approvals.request(make_action(command="ls")))
+    opencode = asyncio.create_task(
         ctx.approvals.request(
-            make_action(name="shell", agent=AgentType.CODEX, session="s2", command="ls")
+            make_action(name="bash", agent=AgentType.OPENCODE, session="s2", command="ls")
         )
     )
     await wait_for_pending(ctx.approvals, count=2)
 
     counts = await ctx.approvals.pending_counts()
-    assert counts == {"cline": 1, "codex": 1}
+    assert counts == {"codex": 1, "opencode": 1}
 
-    cline_records = await ctx.approvals.list(agent_type=AgentType.CLINE)
     codex_records = await ctx.approvals.list(agent_type=AgentType.CODEX)
-    assert len(cline_records) == 1
+    opencode_records = await ctx.approvals.list(agent_type=AgentType.OPENCODE)
     assert len(codex_records) == 1
-    assert cline_records[0].agent_type is AgentType.CLINE
+    assert len(opencode_records) == 1
     assert codex_records[0].agent_type is AgentType.CODEX
+    assert opencode_records[0].agent_type is AgentType.OPENCODE
 
     await ctx.approvals.cancel_all()
-    await asyncio.gather(cline, codex)
+    await asyncio.gather(codex, opencode)
 
 
 async def test_sessions_are_recorded_per_agent(ctx):
@@ -202,22 +202,22 @@ async def test_sessions_are_recorded_per_agent(ctx):
         make_action(
             ToolKind.FILE_READ,
             "read_file",
-            agent=AgentType.CODEX,
+            agent=AgentType.OPENCODE,
             session="s2",
             paths=[f"{WORKSPACE}/b.py"],
         )
     )
-    cline_sessions = await ctx.sessions.summaries(AgentType.CLINE)
     codex_sessions = await ctx.sessions.summaries(AgentType.CODEX)
-    assert [s.session_id for s in cline_sessions] == ["s1"]
-    assert [s.session_id for s in codex_sessions] == ["s2"]
+    opencode_sessions = await ctx.sessions.summaries(AgentType.OPENCODE)
+    assert [s.session_id for s in codex_sessions] == ["s1"]
+    assert [s.session_id for s in opencode_sessions] == ["s2"]
 
 
 # --- config contracts -------------------------------------------------------
 
 
 async def test_disabled_agent_fails_closed_immediately(ctx):
-    ctx.config.agents.cline.enabled = False
+    ctx.config.agents.codex.enabled = False
     outcome = await ctx.approvals.request(make_action(command="ls"))
     assert not outcome.allowed
     assert outcome.state is ApprovalState.DENIED
@@ -263,7 +263,7 @@ async def test_stored_approval_is_redacted(ctx):
     pending = await wait_for_pending(ctx.approvals)
     assert secret not in pending[0].action.command
 
-    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    events = await ctx.activity.events(agent_type=AgentType.CODEX, session_id="s1")
     requested = next(
         event for event in events if event.kind is ActivityKind.APPROVAL_REQUESTED
     )
@@ -285,7 +285,7 @@ async def test_failed_insert_closes_the_requested_card(ctx, monkeypatch):
     with pytest.raises(RuntimeError):
         await ctx.approvals.request(make_action(command="ls"))
 
-    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    events = await ctx.activity.events(agent_type=AgentType.CODEX, session_id="s1")
     kinds = [event.kind for event in events]
     assert ActivityKind.APPROVAL_REQUESTED in kinds
     assert ActivityKind.APPROVAL_DECIDED in kinds

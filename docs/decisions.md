@@ -186,4 +186,15 @@ Append-only. Newest at the bottom. Each entry: what was decided, why, and where 
 **Spec:** §9.3, §9.4, §12.5, §16.1.
 **Implemented:** `agentd/src/agentd/approvals.py`, `agentd/src/agentd/policy.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/local_api.py`, `agentd/src/agentd/db.py`.
 
+## D-025 — The agents are Codex and OpenCode; Cline is dropped
+
+**Decision:** The supported agents are Codex (hook-gated, full approval loop) and OpenCode (monitor-only). The Cline adapter, transcript reader, config entry and `agentd-cline-hook` entrypoint are removed, and the first migration deletes any stored Cline rows — the row mappers only know `AgentType('codex')` and `AgentType('opencode')`, so leftover rows would crash the list endpoints. OpenCode deliberately gets **no** hook adapter: it has its own permission system and the owner does not want AgentLink gating it. AgentLink reads OpenCode for the chat and the feed, nothing else.
+
+**Why:** Cline was never verified on this machine (its Phase 0 table stayed blank, its reader was written against documented-but-unobserved JSON shapes) and it is no longer used. OpenCode is used daily, and its v2 storage is a local SQLite database (`~/.local/share/opencode/opencode.db`) with an append-only, per-session `session_message` log whose `seq` rises monotonically — a cleaner fit for the high-water-mark watcher (D-018) than file tails, and sessions natively carry titles and directories.
+
+**Consequences:** The reader opens the live database **read-only** (WAL allows concurrent readers) and never touches the `account`/`credential` tables, which hold secrets; a locked or unreadable database yields no sessions, never an error. Because OpenCode *updates* a message row while a turn streams (a tool part's `state` fills in as the tool runs), the per-session watermark re-reads the boundary message instead of skipping past it, so a result that arrives after first sight is refreshed in place by event id. Event ids are `opencode:<message_id>[:<part>][:call|:out]` — message ids are globally unique, so they are the index. `user` messages map to user bubbles, assistant content parts to reasoning/text/tool-call/tool-result, `synthetic` (injected shell output) to `NOTE`, and `idle` to a feed-only turn boundary; `system` and `model-switched` are dropped. The phone's agent chips become `All / Codex / OpenCode`. `docs/SPEC.md` still describes Cline throughout: it is the original spec, and this log supersedes it.
+
+**Spec:** §8.1, §12 (superseded in part).
+**Implemented:** `agentd/src/agentd/transcripts/opencode.py`, `agentd/src/agentd/db.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/webui.py`.
+
 

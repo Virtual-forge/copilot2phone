@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 from agentd.protocol import ActivityKind, AgentType
-from agentd.transcripts import READER_VERSION, ClineTranscriptReader, CodexTranscriptReader
+from agentd.transcripts import (
+    READER_VERSION,
+    CodexTranscriptReader,
+    OpencodeTranscriptReader,
+)
 from agentd.watcher import TranscriptWatcher
 
 CODEX_LINES = [
@@ -292,102 +297,251 @@ def test_codex_unified_exec_is_plumbing(tmp_path):
     assert events[4].detail["call_id"] == "c2"
 
 
-# --- cline ----------------------------------------------------------------
+# --- opencode ---------------------------------------------------------------
 
 
-def write_cline(tasks_dir: Path) -> Path:
-    task = tasks_dir / "1790783268916_s26r1"
-    task.mkdir(parents=True, exist_ok=True)
-    (task / "task_metadata.json").write_text(
-        json.dumps({"task": "Add a health endpoint"}), encoding="utf-8"
+def write_opencode(home: Path) -> Path:
+    """A synthetic OpenCode database: only the columns the reader queries.
+
+    The real v2 schema is a superset (``account``/``credential`` tables hold
+    secrets and are deliberately never touched by the reader).
+    """
+    home.mkdir(parents=True, exist_ok=True)
+    db = home / "opencode.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE project (
+          id TEXT PRIMARY KEY,
+          worktree TEXT NOT NULL
+        );
+        CREATE TABLE session_v2 (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          directory TEXT NOT NULL,
+          title TEXT,
+          time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL,
+          time_archived INTEGER
+        );
+        CREATE TABLE session_message (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          time_created INTEGER NOT NULL,
+          data TEXT NOT NULL
+        );
+        """
     )
-    (task / "api_conversation_history.json").write_text(
-        json.dumps(
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "Add a health endpoint"}],
-                },
-                {
-                    "role": "assistant",
-                    "content": [
-                        {"type": "text", "text": "Sure, I'll add it."},
-                        {
-                            "type": "tool_use",
-                            "name": "write_to_file",
-                            "input": {"path": "app.py"},
+    conn.execute("INSERT INTO project VALUES ('prj_1', 'C:/work/project')")
+    conn.execute(
+        "INSERT INTO session_v2 VALUES"
+        " ('ses_1', 'prj_1', 'C:/work/project', 'List the files',"
+        " 1790980000000, 1790980009000, NULL)"
+    )
+    messages = [
+        ("msg_1", "user", 4, {"text": "list the files"}),
+        (
+            "msg_2",
+            "assistant",
+            5,
+            {
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "text": "I should run ls",
+                        "time": {"created": 1790980002000},
+                    },
+                    {"type": "text", "text": "Running it."},
+                    {
+                        "type": "tool",
+                        "id": "t1",
+                        "name": "glob",
+                        "state": {
+                            "status": "completed",
+                            "input": {"pattern": "*"},
+                            "content": [{"type": "text", "text": "a.py\nb.py"}],
                         },
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [{"type": "tool_result", "content": "ok"}],
-                },
-            ]
+                    },
+                ]
+            },
         ),
-        encoding="utf-8",
-    )
-    return task
+        ("msg_3", "idle", 6, {"outcome": "success"}),
+        (
+            "msg_4",
+            "synthetic",
+            7,
+            {"text": "<shell>ok</shell>", "description": "pytest"},
+        ),
+        ("msg_5", "model-switched", 8, {"to": "x"}),
+        (
+            "msg_6",
+            "assistant",
+            9,
+            {
+                "content": [
+                    {
+                        "type": "tool",
+                        "id": "t2",
+                        "name": "bash",
+                        "state": {"status": "running", "input": {"command": "ls"}},
+                    },
+                ]
+            },
+        ),
+    ]
+    for message_id, mtype, seq, data in messages:
+        conn.execute(
+            "INSERT INTO session_message VALUES (?, 'ses_1', ?, ?, ?, ?)",
+            (message_id, mtype, seq, 1790980000000 + seq * 1000, json.dumps(data)),
+        )
+    conn.commit()
+    conn.close()
+    return db
 
 
-def test_cline_discover(tmp_path):
-    tasks = tmp_path / "tasks"
-    write_cline(tasks)
-    sessions = ClineTranscriptReader(tasks).discover()
+def test_opencode_discover(tmp_path):
+    db = write_opencode(tmp_path)
+    sessions = OpencodeTranscriptReader(db).discover()
     assert len(sessions) == 1
     session = sessions[0]
-    assert session.agent_type is AgentType.CLINE
-    assert session.session_id == "1790783268916_s26r1"
-    assert session.title == "Add a health endpoint"
-    # the directory name carries the epoch-ms start time
+    assert session.agent_type is AgentType.OPENCODE
+    assert session.session_id == "ses_1"
+    assert session.workspace_path == "C:/work/project"
+    assert session.title == "List the files"
     assert session.started_at is not None
     assert session.started_at.year == 2026
 
 
-def test_cline_read_api_history(tmp_path):
-    tasks = tmp_path / "tasks"
-    write_cline(tasks)
-    reader = ClineTranscriptReader(tasks)
-    session = reader.discover()[0]
-    events = reader.read(session)
-    assert [event.kind for event in events] == [
+def test_opencode_read_maps_every_message(tmp_path):
+    db = write_opencode(tmp_path)
+    reader = OpencodeTranscriptReader(db)
+    events = reader.read(reader.discover()[0])
+    kinds = [event.kind for event in events]
+    assert kinds == [
         ActivityKind.USER_MESSAGE,
+        ActivityKind.REASONING,
         ActivityKind.ASSISTANT_MESSAGE,
         ActivityKind.TOOL_CALL,
         ActivityKind.TOOL_RESULT,
+        ActivityKind.TASK_FINISHED,  # idle: feed-only turn boundary
+        ActivityKind.NOTE,           # synthetic: injected shell output
+        ActivityKind.TOOL_CALL,      # in-flight tool: call, no result yet
     ]
-    assert events[0].text == "Add a health endpoint"
-    assert events[2].detail["tool_name"] == "write_to_file"
+    user = events[0]
+    assert user.text == "list the files"
+    call = events[3]
+    assert call.detail["tool_name"] == "glob"
+    assert json.loads(call.text) == {"pattern": "*"}
+    result = events[4]
+    assert result.text == "a.py\nb.py"
+    running = events[7]
+    assert running.detail["status"] == "running"
 
 
-def test_cline_falls_back_to_ui_messages(tmp_path):
-    tasks = tmp_path / "tasks"
-    task = tasks / "1790783268916_s26r1"
-    task.mkdir(parents=True)
-    (task / "ui_messages.json").write_text(
-        json.dumps(
-            [
-                {"ts": 1790783268916, "type": "say", "say": "user_feedback", "text": "hi"},
-                {"ts": 1790783269000, "type": "say", "say": "text", "text": "working on it"},
-                {"ts": 1790783269100, "type": "ask", "ask": "command", "text": "ls"},
-                {"ts": 1790783269200, "type": "say", "say": "command_output", "text": "a.py"},
-            ]
+def test_opencode_event_ids_are_stable(tmp_path):
+    db = write_opencode(tmp_path)
+    reader = OpencodeTranscriptReader(db)
+    session = reader.discover()[0]
+    first = [event.event_id for event in reader.read(session)]
+    second = [event.event_id for event in reader.read(session)]
+    assert first == second
+    assert len(set(first)) == len(first)
+    # OpenCode message ids are globally unique, so they are the index
+    assert first[0] == "opencode:msg_1"
+    assert first[3] == "opencode:msg_2:2:call"
+
+
+def test_opencode_missing_db_is_empty(tmp_path):
+    assert OpencodeTranscriptReader(tmp_path / "nope.db").discover() == []
+
+
+def test_opencode_archived_sessions_are_hidden(tmp_path):
+    db = write_opencode(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE session_v2 SET time_archived = 1")
+    conn.commit()
+    conn.close()
+    assert OpencodeTranscriptReader(db).discover() == []
+
+
+def test_opencode_watermark_rereads_the_boundary_message(tmp_path):
+    """A tool that was still running when first seen must get its result on
+    the next scan: the watermark re-reads the boundary message, and the
+    stored events are refreshed in place by id (D-018)."""
+    db = write_opencode(tmp_path)
+    reader = OpencodeTranscriptReader(db)
+    session = reader.discover()[0]
+    first = reader.read(session)
+    assert first.marks[str(db)] == (0, 9)
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE session_message SET data = ? WHERE id = 'msg_6'",
+        (
+            json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool",
+                            "id": "t2",
+                            "name": "bash",
+                            "state": {
+                                "status": "completed",
+                                "input": {"command": "ls"},
+                                "content": [{"type": "text", "text": "a.py"}],
+                            },
+                        }
+                    ]
+                }
+            ),
         ),
-        encoding="utf-8",
     )
-    reader = ClineTranscriptReader(tasks)
-    session = reader.discover()[0]
-    events = reader.read(session)
-    assert [event.kind for event in events] == [
-        ActivityKind.USER_MESSAGE,
-        ActivityKind.ASSISTANT_MESSAGE,
-        ActivityKind.TOOL_CALL,
-        ActivityKind.TOOL_RESULT,
+    conn.commit()
+    conn.close()
+
+    tail = reader.read(session, starts={str(db): first.marks[str(db)]})
+    assert [event.event_id for event in tail] == [
+        "opencode:msg_6:0:call",
+        "opencode:msg_6:0:out",
     ]
+    assert tail.marks[str(db)] == (0, 9)
+    assert tail[1].text == "a.py"
 
 
-def test_cline_missing_dir_is_empty(tmp_path):
-    assert ClineTranscriptReader(tmp_path / "nope").discover() == []
+async def test_watcher_ingests_opencode_sessions(ctx, tmp_path):
+    db = write_opencode(tmp_path / "oc")
+    watcher = TranscriptWatcher(
+        activity=ctx.activity,
+        sessions=ctx.sessions,
+        db=ctx.db,
+        readers=[OpencodeTranscriptReader(db)],
+    )
+
+    assert await watcher.scan_once() > 0
+    assert await watcher.scan_once() == 0  # unchanged database
+
+    summaries = await ctx.sessions.summaries()
+    assert [summary.session_id for summary in summaries] == ["ses_1"]
+    assert summaries[0].title == "List the files"
+    # the idle marker is feed-only, so the chat holds seven of the eight events
+    assert summaries[0].message_count == 7
+
+    # a new message lands: only it is inserted
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO session_message VALUES ('msg_7', 'ses_1', 'user', 10,"
+        " 1790980100000, ?)",
+        (json.dumps({"text": "thanks"}),),
+    )
+    conn.commit()
+    conn.close()
+    assert await watcher.scan_once() == 1
+    messages = await ctx.activity.messages(
+        agent_type=AgentType.OPENCODE, session_id="ses_1"
+    )
+    assert messages[-1].text == "thanks"
 
 
 # --- watcher --------------------------------------------------------------

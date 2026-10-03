@@ -30,8 +30,8 @@ from .db import Database, TranscriptMark
 from .sessions import SessionManager
 from .transcripts import (
     READER_VERSION,
-    ClineTranscriptReader,
     CodexTranscriptReader,
+    OpencodeTranscriptReader,
     TranscriptReader,
     TranscriptSession,
 )
@@ -59,7 +59,7 @@ class TranscriptWatcher:
         self._readers: list[TranscriptReader] = (
             readers
             if readers is not None
-            else [ClineTranscriptReader(), CodexTranscriptReader()]
+            else [CodexTranscriptReader(), OpencodeTranscriptReader()]
         )
         self._interval = interval
         self._fingerprints: dict[str, tuple[tuple[float, int], ...]] = {}

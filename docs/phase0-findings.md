@@ -1,50 +1,34 @@
 # Phase 0 findings
 
-Fill this in by running the probes on the machine that has Cline and Codex
+Fill in by running the probes on the machine that has the agents
 installed. Every row here is a **blocking unknown**: the adapter code in
 `agentd/src/agentd/adapters/` is written against the *assumed* contract and must
 be corrected once the real one is captured.
+
+> **Note (D-025):** Cline is no longer supported; its probe (P0-1) was removed.
+> OpenCode needs no hook probe — it is read straight from its SQLite session
+> store, verified against the real database. The Codex contract below is
+> *partially* confirmed by real usage: the audit log shows hooks arriving with
+> correct session ids and tool names, and deny reasons reach the model.
 
 ## How to run the probes
 
 ```powershell
 # 1. capture whatever the agent sends
-.\scripts\probe-hook.ps1 -Agent cline
+.\scripts\probe-hook.ps1 -Agent codex
 
 # 2. inspect the capture
 Get-ChildItem "$env:USERPROFILE\.agentlink\probe" | Sort-Object LastWriteTime -Descending
-Get-Content "$env:USERPROFILE\.agentlink\probe\cline-input-*.json" | Select-Object -Last 1
+Get-Content "$env:USERPROFILE\.agentlink\probe\codex-input-*.json" | Select-Object -Last 1
 
 # 3. force a block and see whether the agent honours it
-'{"cancel": true, "errorMessage": "probe block"}' |
-    Set-Content "$env:USERPROFILE\.agentlink\probe\cline-response.json"
-.\scripts\probe-hook.ps1 -Agent cline
+.\scripts\probe-hook.ps1 -Agent codex -ExitCode 2
 ```
 
 Install the probe as the real hook (see the agent's hook settings) so it is
 invoked by the agent itself, not by hand.
 
 ---
-
-## P0-1 — Cline `PreToolUse` contract
-
-| Question | Finding |
-|---|---|
-| Where is the hook configured? (path / setting name) | |
-| Exact stdin JSON shape (paste a real capture) | |
-| Is the tool name at `preToolUse.toolName`? | |
-| Are parameters at `preToolUse.parameters`? | |
-| Session id field name | |
-| Workspace root field name | |
-| Exact stdout shape that **allows** | |
-| Exact stdout shape that **blocks** | |
-| Is `errorMessage` surfaced to the model? | |
-| Exit code on allow / on block | |
-| Does the hook actually block the tool call? | |
-| Timeout before Cline gives up | |
-
-**Fallback if the hook cannot block:** wrap the agent in a launcher that
-intercepts the tool call, or fall back to post-hoc review only.
 
 ## P0-2 — Codex `PreToolUse` contract
 
@@ -65,7 +49,6 @@ intercepts the tool call, or fall back to post-hoc review only.
 
 | Question | Finding |
 |---|---|
-| Longest a Cline hook may block before being killed | |
 | Longest a Codex hook may block before being killed | |
 | Does the agent retry the hook after a timeout? | |
 
@@ -75,8 +58,8 @@ This sets `agents.<name>.hook_timeout_seconds` in `config.toml` (D-005).
 
 | Question | Finding |
 |---|---|
-| Can two Cline tasks run at once? | |
-| Can Cline and Codex run at once? | |
+| Can two Codex threads run at once? | |
+| Can Codex and OpenCode run at once? | |
 | Are hook invocations serialised per agent? | |
 | Is the session id stable across a task? | |
 
@@ -84,9 +67,8 @@ This sets `agents.<name>.hook_timeout_seconds` in `config.toml` (D-005).
 
 | Question | Finding |
 |---|---|
-| Cline hook file location(s) | |
 | Codex hook config location | |
-| Does either agent ship a hook installer? | |
+| Does the agent ship a hook installer? | |
 | Are hooks per-workspace or global? | |
 
 ## P0-6 — Corporate proxy / TLS inspection
@@ -124,7 +106,5 @@ known. Each entry should name the file and the exact change.
 
 | # | File | Change | Done |
 |---|---|---|---|
-| 1 | `adapters/cline/mapping.py` | | ☐ |
-| 2 | `adapters/cline/hook_cli.py` | | ☐ |
-| 3 | `adapters/codex/mapping.py` | | ☐ |
-| 4 | `adapters/codex/hook_cli.py` | | ☐ |
+| 1 | `adapters/codex/mapping.py` | | ☐ |
+| 2 | `adapters/codex/hook_cli.py` | | ☐ |

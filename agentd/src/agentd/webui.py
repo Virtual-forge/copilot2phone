@@ -98,8 +98,8 @@ PAGE = r"""<!doctype html>
     padding: 2px 7px; border-radius: 4px; background: var(--card-2); color: var(--dim);
     border: 1px solid transparent;
   }
-  .badge.cline { color: #7cb8ff; background: rgba(83,155,245,.1); border-color: rgba(83,155,245,.3); }
   .badge.codex { color: #c3a9f7; background: rgba(179,146,240,.1); border-color: rgba(179,146,240,.3); }
+  .badge.opencode { color: #58d6e0; background: rgba(88,214,224,.1); border-color: rgba(88,214,224,.3); }
   .badge.low { color: #6fdd8b; background: rgba(63,185,80,.1); border-color: rgba(63,185,80,.3); }
   .badge.medium { color: #ecb46b; background: rgba(224,164,88,.1); border-color: rgba(224,164,88,.3); }
   .badge.high { color: #ff918a; background: rgba(244,112,103,.12); border-color: rgba(244,112,103,.35); }
@@ -599,7 +599,7 @@ function renderSessions(items) {
   main.innerHTML = "";
   if (!items.length) {
     main.innerHTML =
-      '<div class="empty">No sessions yet.<br>Start Cline or Codex and they will show up here.</div>';
+      '<div class="empty">No sessions yet.<br>Start Codex or OpenCode and they will show up here.</div>';
     return;
   }
   items.forEach(s => main.appendChild(sessionCard(s)));
@@ -822,12 +822,12 @@ function setHeader(view, detail) {
 
 /* ---------- filter chips ---------- */
 function renderChips(counts) {
-  const defs = [["all", "All"], ["cline", "Cline"], ["codex", "Codex"]];
+  const defs = [["all", "All"], ["codex", "Codex"], ["opencode", "OpenCode"]];
   const box = document.getElementById("chips");
   box.innerHTML = "";
   defs.forEach(([key, label]) => {
     const n = key === "all"
-      ? (counts.cline || 0) + (counts.codex || 0)
+      ? (counts.codex || 0) + (counts.opencode || 0)
       : (counts[key] || 0);
     const b = document.createElement("button");
     b.className = "chip" + (filter === key ? " sel" : "");

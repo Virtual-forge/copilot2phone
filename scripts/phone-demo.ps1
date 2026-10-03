@@ -88,8 +88,8 @@ else {
 $fakeHook = Join-Path $PSScriptRoot 'fake-hook.ps1'
 
 $cases = @(
-    @{ Agent = 'cline'; Tool = 'execute_command'; Command = 'npm test'; Label = 'medium - tap Allow' }
-    @{ Agent = 'cline'; Tool = 'execute_command'; Command = 'rm -rf build/'; Label = 'high - press and hold' }
+    @{ Agent = 'codex'; Tool = 'shell'; Command = 'npm test'; Label = 'medium - tap Allow' }
+    @{ Agent = 'codex'; Tool = 'shell'; Command = 'rm -rf build/'; Label = 'high - press and hold' }
     @{ Agent = 'codex'; Tool = 'shell'; Command = 'git push --force origin main'; Label = 'high - press and hold' }
 )
 

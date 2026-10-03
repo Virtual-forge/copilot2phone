@@ -61,7 +61,7 @@ def live_daemon(home: Path) -> int:
     port = free_port()
     config = Config()
     config.server.port = port
-    config.agents.cline.hook_timeout_seconds = 10
+    config.agents.codex.hook_timeout_seconds = 10
     config.agents.codex.hook_timeout_seconds = 10
 
     # The hook CLI reads config and token from AGENTLINK_HOME.

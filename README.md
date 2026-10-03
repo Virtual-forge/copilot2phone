@@ -1,6 +1,6 @@
 # AgentLink
 
-Monitor and approve coding-agent activity (Cline, Codex) from your phone, with
+Monitor and approve coding-agent activity (Codex, OpenCode) from your phone, with
 strict per-agent segregation.
 
 The full specification lives in [`docs/SPEC.md`](docs/SPEC.md). Design decisions
@@ -17,12 +17,13 @@ agent hook  ->  agentd (loopback API)  ->  decision  ->  hook unblocks
 | Component | State |
 |---|---|
 | `agentd` daemon (local API, approvals, policy, audit, sessions) | ✅ slice 1 |
-| Cline + Codex hook adapters | ✅ slice 1 (contracts pending Phase 0) |
+| Codex hook adapter | ✅ slice 1 (contract pending Phase 0) |
+| OpenCode session monitoring (chat + activity, no gating) | ✅ |
 | `agentlink-sim` (terminal phone) | ✅ slice 1 |
 | Off-LAN access via ngrok tunnel | ✅ `agentd run --tunnel` |
 | Session-centric phone UI (sessions → chat / activity / approvals) | ✅ |
 | Approvals inline in the chat timeline | ✅ |
-| Transcript ingestion (Codex verified, Cline best-effort) | ✅ |
+| Transcript ingestion (Codex + OpenCode, both verified against real data) | ✅ |
 | Cloud relay + E2E crypto | ⏳ slice 2 |
 | Real hook installation (`agentd install`) | ⏳ slice 3 |
 | Git diff engine + file browser | ⏳ slice 5 |
@@ -66,14 +67,14 @@ With `agentd run` in one terminal:
 .\scripts\demo-slice1.ps1
 ```
 
-That fires a synthetic Cline hook (which blocks), shows the pending approval,
+That fires a synthetic Codex hook (which blocks), shows the pending approval,
 approves it, and prints the hook's response.
 
 ### Try it by hand
 
 ```powershell
 # terminal 2 — this blocks until you decide
-.\scripts\fake-hook.ps1 -Agent cline -Tool execute_command -Command "rm -rf build/"
+.\scripts\fake-hook.ps1 -Agent codex -Tool shell -Command "rm -rf build/"
 
 # terminal 3
 agentlink-sim list --state pending
@@ -134,9 +135,9 @@ Notes:
 Open the URL printed by `agentd run` (or `--lan` / `--tunnel`) and paste the
 token. The app is session-centric:
 
-- **Home** lists every session the daemon knows about — Cline tasks and Codex
-  threads — with its agent, title, workspace, message count and how many
-  approvals are waiting. Filter with the `All / Cline / Codex` chips.
+- **Home** lists every session the daemon knows about — Codex threads and
+  OpenCode sessions — with its agent, title, workspace, message count and how
+  many approvals are waiting. Filter with the `All / Codex / OpenCode` chips.
 - **Tap a session** to open it. Three tabs:
   - **Chat** — the real conversation, with approvals interleaved in order: your
     prompts, the agent's replies, its reasoning, every tool call with its
@@ -171,23 +172,28 @@ tool calls. The daemon reads each agent's own transcript instead (D-016):
 | Agent | Read from |
 |---|---|
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl` (+ thread names from `~/.codex/session_index.jsonl`) |
-| Cline | `%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/<taskId>/` |
+| OpenCode | `~/.local/share/opencode/opencode.db` — its SQLite session store, opened read-only |
 
-Override with `CODEX_HOME` / `CLINE_TASKS_DIR` if your agents store state
-elsewhere. Reading is strictly read-only and best-effort: a malformed file is
-skipped, never fatal.
+Override with `CODEX_HOME` / `OPENCODE_DB` if your agents store state
+elsewhere. Reading is strictly read-only and best-effort: a malformed file or
+a locked database is skipped, never fatal. OpenCode's reader never touches
+the `account` / `credential` tables, which hold secrets.
+
+OpenCode is **monitor-only** (D-025): it has its own permission system, no
+AgentLink hook is installed for it, and the daemon only mirrors its sessions
+into the chat and activity feed.
 
 ## How a decision is made
 
-1. The agent calls its `PreToolUse` hook; the adapter normalises the payload
+1. Codex calls its `PreToolUse` hook; the adapter normalises the payload
    into an `Action` and POSTs it to `http://127.0.0.1:47800/v1/approvals`.
 2. The policy engine scores it. Reads inside the workspace are allowed
    outright; everything else follows `[policy] default_effect` (`ask` by
    default — D-024).
 3. If asked, the daemon records the approval and **blocks the hook**.
 4. You decide from the phone (or `agentlink-sim`).
-5. The hook returns `{"cancel": false}` (Cline) or exit `0` (Codex) to allow,
-   or `{"cancel": true}` / exit `2` to block.
+5. The hook exits `0` to allow, or exits `2` (with the reason on stderr,
+   which Codex surfaces to the model) to block.
 
 **Everything fails closed.** If the daemon is unreachable, the payload is
 malformed, the token is missing, or the approval times out, the action is
@@ -209,24 +215,24 @@ cd agentd
 python -m pytest -q
 ```
 
-166 tests, including a real end-to-end run (a live daemon plus the real hook
-entrypoints), the cross-agent segregation check, the tunnel wiring (ngrok is
+157 tests, including a real end-to-end run (a live daemon plus the real hook
+entrypoint), the cross-agent segregation check, the tunnel wiring (ngrok is
 faked, so the suite passes without it installed), the transcript readers
 driven by synthetic Codex rollouts (including a resumed thread split across
 several rollout files, and incremental re-scan from persisted high-water
-marks) and Cline task directories, and the chat timeline fold run under node
-against the page's own JavaScript.
+marks) and a synthetic OpenCode session database, and the chat timeline fold
+run under node against the page's own JavaScript.
 
 ## Phase 0
 
-The exact Cline and Codex hook contracts are unverified. Run the probes on the
-machine that has both agents installed and fill in
+The exact Codex hook contract is still formally unverified. Run the probe on
+the machine that has the agent installed and fill in
 [`docs/phase0-findings.md`](docs/phase0-findings.md):
 
 ```powershell
-.\scripts\probe-hook.ps1 -Agent cline
 .\scripts\probe-hook.ps1 -Agent codex
 ```
 
-Until then the adapters use a deliberately tolerant parser that accepts several
-plausible payload shapes.
+Until then the adapter uses a deliberately tolerant parser that accepts
+several plausible payload shapes. (OpenCode needs no probe — it is read
+straight from its database, verified against the real thing.)

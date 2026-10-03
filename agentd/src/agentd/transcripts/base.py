@@ -38,7 +38,8 @@ class TranscriptSession:
     source_path: Path | None = None
     #: A Codex thread can be resumed into a new rollout file that keeps the
     #: same session id. The reader groups those files into one session so
-    #: ``read`` sees the whole conversation in order. Cline always has one.
+    #: ``read`` sees the whole conversation in order. OpenCode's source is
+    #: the shared session database, one entry per logical session.
     source_paths: list[Path] = field(default_factory=list)
 
     @property
@@ -69,8 +70,8 @@ class TranscriptRead(list):
     working. ``marks`` maps ``str(source_path)`` to ``(pos, records)``: the
     byte offset just past the last complete ingested line, and the number of
     valid records consumed before it (records are what number a session's
-    event ids). A reader that cannot track consumption — Cline reads a
-    couple of small JSON files — reports no marks and is re-read in full.
+    event ids). A reader that cannot track consumption reports no marks and
+    is always re-read in full.
     """
 
     def __init__(

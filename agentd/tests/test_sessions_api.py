@@ -36,10 +36,10 @@ def event(**overrides) -> dict:
 
 def command_action(session_id: str = "s1") -> dict:
     return {
-        "agent_type": "cline",
+        "agent_type": "codex",
         "session_id": session_id,
         "workspace_path": WORKSPACE,
-        "tool": {"name": "execute_command", "kind": "command"},
+        "tool": {"name": "shell", "kind": "command"},
         "action": {"summary": "ls", "command": "ls"},
     }
 
@@ -106,9 +106,9 @@ async def test_sessions_filter_by_agent(client):
         "/v1/events",
         json=[
             event(
-                agent_type="cline",
+                agent_type="opencode",
                 session_id="s2",
-                event_id="cline:s2:0",
+                event_id="opencode:s2:0",
             )
         ],
     )
@@ -247,7 +247,7 @@ async def test_approval_events_carry_what_the_card_needs(client):
     requested = next(item for item in events if item["kind"] == "approval_requested")
     detail = requested["detail"]
     assert detail["approval_id"] == approval_id
-    assert detail["tool"] == "execute_command"
+    assert detail["tool"] == "shell"
     assert detail["command"] == "ls"
     assert detail["risk"] == "medium"
     assert detail["expires_at"]

@@ -180,7 +180,7 @@ def make_action(kind: ToolKind, name: str, **detail):
     from agentd.protocol import Action, ActionDetail, Tool
 
     return Action(
-        agent_type=AgentType.CLINE,
+        agent_type=AgentType.CODEX,
         session_id="s1",
         workspace_path=WORKSPACE,
         tool=Tool(name=name, kind=kind),
@@ -192,7 +192,7 @@ async def test_auto_allowed_action_records_activity(ctx):
     await ctx.approvals.request(
         make_action(ToolKind.FILE_READ, "read_file", summary="read", paths=[f"{WORKSPACE}/a.py"])
     )
-    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    events = await ctx.activity.events(agent_type=AgentType.CODEX, session_id="s1")
     assert [event.kind for event in events] == [ActivityKind.APPROVAL_DECIDED]
     assert events[0].detail["decision"] == "allow"
 
@@ -219,7 +219,7 @@ async def test_blocking_approval_records_request_and_decision(ctx):
     )
     await asyncio.wait_for(task, timeout=5)
 
-    events = await ctx.activity.events(agent_type=AgentType.CLINE, session_id="s1")
+    events = await ctx.activity.events(agent_type=AgentType.CODEX, session_id="s1")
     assert [event.kind for event in events] == [
         ActivityKind.APPROVAL_REQUESTED,
         ActivityKind.APPROVAL_DECIDED,

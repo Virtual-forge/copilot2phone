@@ -10,12 +10,12 @@ from .base import (
     parse_iso_ts,
     sort_key,
 )
-from .cline import ClineTranscriptReader
 from .codex import CodexTranscriptReader
+from .opencode import OpencodeTranscriptReader
 
 __all__ = [
-    "ClineTranscriptReader",
     "CodexTranscriptReader",
+    "OpencodeTranscriptReader",
     "READER_VERSION",
     "TranscriptEvent",
     "TranscriptRead",

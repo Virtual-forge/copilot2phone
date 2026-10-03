@@ -1,6 +1,6 @@
 """End-to-end slice 1: hook -> daemon -> decision -> hook unblocks.
 
-These tests run a real agentd over HTTP and drive the real hook entrypoints,
+These tests run a real agentd over HTTP and drive the real hook entrypoint,
 so they cover the whole walking skeleton including the fail-closed paths.
 """
 
@@ -14,7 +14,6 @@ from pathlib import Path
 
 import httpx
 
-from agentd.adapters.cline import hook_cli as cline_hook
 from agentd.adapters.codex import hook_cli as codex_hook
 from conftest import (
     TEST_TOKEN,
@@ -27,25 +26,18 @@ from conftest import (
 WORKSPACE = "C:/work/project"
 
 
-def cline_payload(command: str = "rm -rf build/", tool: str = "execute_command") -> dict:
-    return {
-        "hookName": "PreToolUse",
-        "taskId": "e2e-cline",
-        "workspaceRoots": [WORKSPACE],
-        "preToolUse": {
-            "toolName": tool,
-            "parameters": {"command": command, "cwd": WORKSPACE},
-        },
-    }
-
-
-def codex_payload(command: str = "rm -rf build/") -> dict:
+def codex_payload(
+    command: str = "rm -rf build/",
+    session_id: str = "e2e-codex",
+    tool: str = "shell",
+    tool_input: dict | None = None,
+) -> dict:
     return {
         "hook_event_name": "PreToolUse",
-        "session_id": "e2e-codex",
+        "session_id": session_id,
         "cwd": WORKSPACE,
-        "tool_name": "shell",
-        "tool_input": {"command": command},
+        "tool_name": tool,
+        "tool_input": tool_input if tool_input is not None else {"command": command},
     }
 
 
@@ -60,48 +52,7 @@ def point_at_dead_daemon(home: Path) -> None:
 # --- the happy path -------------------------------------------------------
 
 
-def test_cline_hook_blocks_until_approved(live_daemon):
-    port = live_daemon
-    buffer = io.StringIO()
-    result: dict = {}
-
-    def target() -> None:
-        result["code"] = cline_hook.run(json.dumps(cline_payload()))
-
-    with contextlib.redirect_stdout(buffer):
-        thread = threading.Thread(target=target)
-        thread.start()
-        approval_id = wait_for_pending(port)
-        decide(port, approval_id, "allow", "e2e allow")
-        thread.join(timeout=15)
-
-    assert not thread.is_alive()
-    assert result["code"] == 0
-    assert json.loads(buffer.getvalue().strip()) == {"cancel": False}
-
-
-def test_cline_hook_blocks_until_denied(live_daemon):
-    port = live_daemon
-    buffer = io.StringIO()
-    result: dict = {}
-
-    def target() -> None:
-        result["code"] = cline_hook.run(json.dumps(cline_payload()))
-
-    with contextlib.redirect_stdout(buffer):
-        thread = threading.Thread(target=target)
-        thread.start()
-        approval_id = wait_for_pending(port)
-        decide(port, approval_id, "deny", "e2e deny")
-        thread.join(timeout=15)
-
-    assert result["code"] == 0
-    body = json.loads(buffer.getvalue().strip())
-    assert body["cancel"] is True
-    assert "e2e deny" in body["errorMessage"]
-
-
-def test_codex_hook_allows_when_approved(live_daemon):
+def test_codex_hook_blocks_until_allowed(live_daemon):
     port = live_daemon
     result: dict = {}
 
@@ -114,10 +65,11 @@ def test_codex_hook_allows_when_approved(live_daemon):
     decide(port, approval_id, "allow", "e2e allow")
     thread.join(timeout=15)
 
+    assert not thread.is_alive()
     assert result["code"] == 0
 
 
-def test_codex_hook_blocks_when_denied(live_daemon):
+def test_codex_hook_blocks_until_denied(live_daemon):
     port = live_daemon
     buffer = io.StringIO()
     result: dict = {}
@@ -138,16 +90,13 @@ def test_codex_hook_blocks_when_denied(live_daemon):
 
 def test_workspace_read_does_not_ask(live_daemon):
     port = live_daemon
-    payload = cline_payload(tool="read_file")
-    payload["preToolUse"]["parameters"] = {"path": f"{WORKSPACE}/a.py"}
+    payload = codex_payload(
+        tool="read_file", tool_input={"path": f"{WORKSPACE}/a.py"}
+    )
 
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        code = cline_hook.run(json.dumps(payload))
+    code = codex_hook.run(json.dumps(payload))
 
     assert code == 0
-    assert json.loads(buffer.getvalue().strip()) == {"cancel": False}
-
     pending = httpx.get(
         f"http://127.0.0.1:{port}/v1/approvals",
         params={"state": "pending"},
@@ -160,52 +109,43 @@ def test_workspace_read_does_not_ask(live_daemon):
 # --- segregation ----------------------------------------------------------
 
 
-def test_agents_do_not_cross_contaminate(live_daemon):
-    """Cline and Codex decisions must never be applied to each other."""
+def test_sessions_do_not_cross_contaminate(live_daemon):
+    """Two concurrent sessions: a decision for one never answers the other."""
     port = live_daemon
-    cline_result: dict = {}
-    codex_result: dict = {}
+    allowed: dict = {}
+    denied: dict = {}
 
-    def run_cline() -> None:
-        cline_result["code"] = cline_hook.run(json.dumps(cline_payload("echo cline")))
+    def run_allowed() -> None:
+        allowed["code"] = codex_hook.run(
+            json.dumps(codex_payload("echo a", session_id="e2e-a"))
+        )
 
-    def run_codex() -> None:
-        codex_result["code"] = codex_hook.run(json.dumps(codex_payload("echo codex")))
+    def run_denied() -> None:
+        denied["code"] = codex_hook.run(
+            json.dumps(codex_payload("echo b", session_id="e2e-b"))
+        )
 
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        cline_thread = threading.Thread(target=run_cline)
-        codex_thread = threading.Thread(target=run_codex)
-        cline_thread.start()
-        codex_thread.start()
+    with contextlib.redirect_stderr(io.StringIO()):
+        allowed_thread = threading.Thread(target=run_allowed)
+        denied_thread = threading.Thread(target=run_denied)
+        allowed_thread.start()
+        denied_thread.start()
 
         pending = wait_for_pending_many(port, 2)
-        by_agent = {item["agent_type"]: item for item in pending}
-        assert set(by_agent) == {"cline", "codex"}
+        by_session = {item["session_id"]: item for item in pending}
+        assert set(by_session) == {"e2e-a", "e2e-b"}
 
-        decide(port, by_agent["cline"]["approval_id"], "allow")
-        decide(port, by_agent["codex"]["approval_id"], "deny")
+        decide(port, by_session["e2e-a"]["approval_id"], "allow")
+        decide(port, by_session["e2e-b"]["approval_id"], "deny")
 
-        cline_thread.join(timeout=15)
-        codex_thread.join(timeout=15)
+        allowed_thread.join(timeout=15)
+        denied_thread.join(timeout=15)
 
-    assert cline_result["code"] == 0
-    assert codex_result["code"] == 2
+    assert allowed["code"] == 0
+    assert denied["code"] == 2
 
 
 # --- fail closed ----------------------------------------------------------
-
-
-def test_cline_hook_fails_closed_when_daemon_is_down(home):
-    point_at_dead_daemon(home)
-    buffer = io.StringIO()
-
-    with contextlib.redirect_stdout(buffer):
-        code = cline_hook.run(json.dumps(cline_payload()))
-
-    assert code == 0
-    body = json.loads(buffer.getvalue().strip())
-    assert body["cancel"] is True
-    assert "daemon" in body["errorMessage"].lower()
 
 
 def test_codex_hook_fails_closed_when_daemon_is_down(home):
@@ -219,14 +159,6 @@ def test_codex_hook_fails_closed_when_daemon_is_down(home):
     assert "daemon" in buffer.getvalue().lower()
 
 
-def test_cline_hook_fails_closed_on_malformed_json(home):
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        code = cline_hook.run("{not json")
-    assert code == 0
-    assert json.loads(buffer.getvalue().strip())["cancel"] is True
-
-
 def test_codex_hook_fails_closed_on_malformed_json(home):
     buffer = io.StringIO()
     with contextlib.redirect_stderr(buffer):
@@ -234,24 +166,20 @@ def test_codex_hook_fails_closed_on_malformed_json(home):
     assert code == 2
 
 
-def test_cline_hook_fails_closed_when_payload_has_no_tool(home):
+def test_codex_hook_fails_closed_when_payload_has_no_tool(home):
     buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        code = cline_hook.run(json.dumps({"taskId": "x"}))
-    assert code == 0
-    body = json.loads(buffer.getvalue().strip())
-    assert body["cancel"] is True
-    assert "parse" in body["errorMessage"].lower()
+    with contextlib.redirect_stderr(buffer):
+        code = codex_hook.run(json.dumps({"session_id": "x"}))
+    assert code == 2
+    assert "parse" in buffer.getvalue().lower()
 
 
-def test_cline_hook_fails_closed_without_a_token(home):
+def test_codex_hook_fails_closed_without_a_token(home):
     """No token file means the daemon has never run: deny."""
     (home / "config.toml").write_text(
         '[server]\nhost = "127.0.0.1"\nport = 1\n', encoding="utf-8"
     )
     buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        code = cline_hook.run(json.dumps(cline_payload()))
-    assert code == 0
-    assert json.loads(buffer.getvalue().strip())["cancel"] is True
-
+    with contextlib.redirect_stderr(buffer):
+        code = codex_hook.run(json.dumps(codex_payload()))
+    assert code == 2

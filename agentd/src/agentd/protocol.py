@@ -46,8 +46,8 @@ def parse_iso(value: str) -> datetime:
 
 
 class AgentType(str, Enum):
-    CLINE = "cline"
     CODEX = "codex"
+    OPENCODE = "opencode"
 
 
 class ToolKind(str, Enum):

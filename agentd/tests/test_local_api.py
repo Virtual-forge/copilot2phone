@@ -7,29 +7,29 @@ import asyncio
 WORKSPACE = "C:/work/project"
 
 
-def cline_action(**detail) -> dict:
+def command_action(**detail) -> dict:
     return {
-        "agent_type": "cline",
+        "agent_type": "codex",
         "session_id": "s1",
         "workspace_path": WORKSPACE,
-        "tool": {"name": "execute_command", "kind": "command"},
+        "tool": {"name": "shell", "kind": "command"},
         "action": {"summary": "ls", "command": "ls", **detail},
     }
 
 
-def codex_action() -> dict:
+def opencode_action() -> dict:
     return {
-        "agent_type": "codex",
+        "agent_type": "opencode",
         "session_id": "s2",
         "workspace_path": WORKSPACE,
-        "tool": {"name": "shell", "kind": "command"},
+        "tool": {"name": "bash", "kind": "command"},
         "action": {"summary": "ls", "command": "ls"},
     }
 
 
 def read_action() -> dict:
     return {
-        "agent_type": "cline",
+        "agent_type": "codex",
         "session_id": "s1",
         "workspace_path": WORKSPACE,
         "tool": {"name": "read_file", "kind": "file_read"},
@@ -88,7 +88,7 @@ async def test_workspace_read_is_auto_allowed(client):
 
 
 async def test_blocking_approval_round_trip(client):
-    task = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
+    task = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
     pending = await poll_pending(client)
     approval_id = pending[0]["approval_id"]
 
@@ -105,7 +105,7 @@ async def test_blocking_approval_round_trip(client):
 
 
 async def test_deny_round_trip(client):
-    task = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
+    task = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
     pending = await poll_pending(client)
     await client.post(
         f"/v1/approvals/{pending[0]['approval_id']}/decision",
@@ -122,7 +122,7 @@ async def test_unknown_approval_is_404(client):
 
 
 async def test_double_decide_is_409(client):
-    task = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
+    task = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
     pending = await poll_pending(client)
     url = f"/v1/approvals/{pending[0]['approval_id']}/decision"
 
@@ -135,36 +135,36 @@ async def test_double_decide_is_409(client):
 
 
 async def test_list_filters_by_agent(client):
-    cline = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
-    codex = asyncio.create_task(client.post("/v1/approvals", json=codex_action()))
+    codex = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
+    opencode = asyncio.create_task(client.post("/v1/approvals", json=opencode_action()))
     await poll_pending(client, count=2)
 
-    cline_list = (await client.get("/v1/approvals", params={"agent_type": "cline"})).json()
     codex_list = (await client.get("/v1/approvals", params={"agent_type": "codex"})).json()
-    assert len(cline_list) == 1
-    assert cline_list[0]["agent_type"] == "cline"
+    opencode_list = (await client.get("/v1/approvals", params={"agent_type": "opencode"})).json()
     assert len(codex_list) == 1
     assert codex_list[0]["agent_type"] == "codex"
+    assert len(opencode_list) == 1
+    assert opencode_list[0]["agent_type"] == "opencode"
 
-    for item in cline_list + codex_list:
+    for item in codex_list + opencode_list:
         await client.post(
             f"/v1/approvals/{item['approval_id']}/decision", json={"decision": "deny"}
         )
-    await asyncio.gather(cline, codex)
+    await asyncio.gather(codex, opencode)
 
 
 # --- status / sessions / audit -------------------------------------------
 
 
 async def test_status_reports_pending_per_agent(client):
-    task = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
+    task = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
     pending = await poll_pending(client)
 
     status = (await client.get("/v1/status")).json()
-    assert status["pending"] == {"cline": 1, "codex": 0}
+    assert status["pending"] == {"codex": 1, "opencode": 0}
     assert status["waiting"] == 1
-    assert status["agents"]["cline"]["enabled"] is True
     assert status["agents"]["codex"]["enabled"] is True
+    assert status["agents"]["opencode"]["enabled"] is True
 
     await client.post(
         f"/v1/approvals/{pending[0]['approval_id']}/decision", json={"decision": "deny"}
@@ -185,7 +185,7 @@ async def test_sessions_endpoint(client):
     await client.post("/v1/approvals", json=read_action())
     sessions = (await client.get("/v1/sessions")).json()
     assert len(sessions) == 1
-    assert sessions[0]["agent_type"] == "cline"
+    assert sessions[0]["agent_type"] == "codex"
     assert sessions[0]["session_id"] == "s1"
 
 
@@ -219,7 +219,7 @@ async def test_phone_ui_does_not_leak_the_token(client):
 
 async def test_phone_ui_decision_flow(client):
     """Replay exactly what the page does: list pending, then decide."""
-    task = asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
+    task = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
     pending = await poll_pending(client)
     approval_id = pending[0]["approval_id"]
 
@@ -236,15 +236,15 @@ async def test_phone_ui_decision_flow(client):
 
 
 async def test_phone_ui_filter_by_agent(client):
-    """The Cline/Codex chips map onto the agent_type query parameter."""
-    asyncio.create_task(client.post("/v1/approvals", json=cline_action()))
-    asyncio.create_task(client.post("/v1/approvals", json=codex_action()))
+    """The Codex/OpenCode chips map onto the agent_type query parameter."""
+    asyncio.create_task(client.post("/v1/approvals", json=command_action()))
+    asyncio.create_task(client.post("/v1/approvals", json=opencode_action()))
     await poll_pending(client, count=2)
-
-    cline_only = (await client.get("/v1/approvals", params={"agent_type": "cline"})).json()
-    assert [item["agent_type"] for item in cline_only] == ["cline"]
 
     codex_only = (await client.get("/v1/approvals", params={"agent_type": "codex"})).json()
     assert [item["agent_type"] for item in codex_only] == ["codex"]
+
+    opencode_only = (await client.get("/v1/approvals", params={"agent_type": "opencode"})).json()
+    assert [item["agent_type"] for item in opencode_only] == ["opencode"]
 
 

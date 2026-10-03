@@ -111,7 +111,7 @@ def _decide(prefix: str, decision: Decision, reason: str | None) -> None:
 
 @app.command("list")
 def list_approvals(
-    agent: str = typer.Option(None, "--agent", "-a", help="cline or codex"),
+    agent: str = typer.Option(None, "--agent", "-a", help="codex or opencode"),
     state: str = typer.Option(None, "--state", "-s", help="pending/allowed/denied/expired"),
     limit: int = typer.Option(50, "--limit", "-n", help="Maximum rows"),
     as_json: bool = typer.Option(False, "--json", help="Emit raw JSON"),

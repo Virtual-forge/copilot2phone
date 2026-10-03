@@ -15,13 +15,13 @@
 
 .EXAMPLE
     # Capture only; allow by default.
-    .\probe-hook.ps1 -Agent cline
+    .\probe-hook.ps1 -Agent codex
 
 .EXAMPLE
     # Force a block for the next invocation.
     '{"cancel": true, "errorMessage": "probe block"}' |
-        Set-Content "$env:USERPROFILE\.agentlink\probe\cline-response.json"
-    .\probe-hook.ps1 -Agent cline
+        Set-Content "$env:USERPROFILE\.agentlink\probe\codex-response.json"
+    .\probe-hook.ps1 -Agent codex
 
 .EXAMPLE
     # Force a non-zero exit for Codex.
@@ -29,8 +29,8 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('cline', 'codex')]
-    [string]$Agent = 'cline',
+    [ValidateSet('codex')]
+    [string]$Agent = 'codex',
 
     [string]$ResponseFile = '',
 
@@ -59,10 +59,8 @@ if (-not $ResponseFile) {
 if (Test-Path $ResponseFile) {
     $response = Get-Content -Raw -Path $ResponseFile
 }
-elseif ($Agent -eq 'cline') {
-    $response = '{"cancel": false}'
-}
 else {
+    # Codex decides by exit code; an empty stdout with exit 0 allows.
     $response = ''
 }
 

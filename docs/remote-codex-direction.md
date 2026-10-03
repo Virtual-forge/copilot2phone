@@ -35,7 +35,7 @@ back to the agent.
 ## Tier 2 — steering through the channel that already exists (small)
 
 The deny reason is *already delivered to the model*: Codex surfaces hook
-stderr (exit 2) and Cline surfaces `errorMessage`. So a typed decision is a
+stderr (exit 2) to the agent, so a typed decision is a
 way to talk to the agent today, with zero new plumbing:
 
 - Add a free-text **reason / reply** field to the phone card and to quick-reply
@@ -47,7 +47,22 @@ This is "steer the agent from your phone" without touching session internals.
 
 ## Tier 3 — typing into the session (the real goal)
 
-Codex sessions are processes reading stdin in a terminal; rollouts are
+**OpenCode is now the front-runner here.** Probing the installed v2.0.22
+(2026-10-03) found first-class remote surfaces: `opencode serve` ("start the
+v2 API and web server"), `opencode api` (call the running server by OpenAPI
+operation), `opencode run --session <id> --prompt "..."` (non-interactive
+message into an existing session), and — inside its own database —
+`session_inbox` / `session_pending` tables with delivery semantics, i.e.
+queued session input is a *native concept*, not a hack. The first probe
+sequence is therefore: capture `opencode serve`'s OpenAPI
+(`opencode api` with no args lists operations), find the session/prompt
+operation, and check whether the TUI and a server client can drive the same
+session concurrently (P0-11). If yes, Tier 3 for OpenCode is days, not
+weeks: an input endpoint on agentd that proxies to the local opencode
+server, a composer on the phone, every injected input audited and mirrored
+into the activity feed as your own turn. No PTY, no scraping.
+
+For Codex, sessions are processes reading stdin in a terminal; rollouts are
 Codex's append-only output, so they cannot be written back into (D-016). Two
 candidate channels — **probe before building**:
 
@@ -109,6 +124,7 @@ Either way:
 
 | # | Probe | Answers |
 |---|---|---|
+| P0-11 | OpenCode server: `opencode serve` + `opencode api` — the operation list, the session/prompt call, and whether a server client and the TUI can drive one session concurrently | whether Tier 3 for OpenCode is a thin proxy |
 | P0-9 | Codex surfaces: `codex --help`, `app-server` / `mcp` subcommands | whether Tier 3(a) exists in the installed version — partially answered: the CLI is not installed; the VS Code extension bundles the core |
 | P0-10 | Resume surface: does `codex resume` (or the extension) accept a prompt non-interactively, and does the resumed rollout reuse the session id? | whether Tier 3(c) can be built cheaply |
 | P0-1 / P0-2 | The still-blank hook contract tables (`docs/phase0-findings.md`) | how reliably the Tier-2 deny-reason channel reaches the model |
@@ -117,7 +133,8 @@ Either way:
 ## What *not* to do
 
 - Don't write to `~/.codex/sessions/**` — the rollouts are Codex's output, not
-  an input queue.
+  an input queue. (Reading OpenCode's `opencode.db` is fine; writing to it is
+  what the `serve` API is for.)
 - Don't ship Tier 3 over the public-tunnel-plus-token-in-fragment transport.
-- Don't build input for Cline yet — it is a VS Code extension with no stdin
-  channel; its surface is different and Codex-first is the pragmatic order.
+- Don't build input for OpenCode by scraping its TUI — its server API exists
+  precisely so nobody has to.

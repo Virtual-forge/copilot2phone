@@ -11,7 +11,7 @@ WORKSPACE = "C:/work/project"
 
 def make_action(kind: ToolKind, name: str = "tool", **detail) -> Action:
     return Action(
-        agent_type=AgentType.CLINE,
+        agent_type=AgentType.CODEX,
         session_id="s1",
         workspace_path=WORKSPACE,
         tool=Tool(name=name, kind=kind),

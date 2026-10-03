@@ -1,6 +1,6 @@
 """SQLite persistence (SPEC.md §8.1).
 
-Every operational read/write takes ``agent_type`` so that Cline and Codex state
+Every operational read/write takes ``agent_type`` so that each agent's state
 can never be mixed (D13 / §8.3).
 """
 
@@ -277,7 +277,23 @@ class Database:
     async def migrate(self) -> None:
         await self.conn.executescript(SCHEMA)
         await self._ensure_columns()
+        await self._purge_removed_agents()
         await self.conn.commit()
+
+    async def _purge_removed_agents(self) -> None:
+        """Delete data belonging to agents this build no longer supports.
+
+        D-025 dropped Cline; rows left behind would crash the row mappers
+        (``AgentType('cline')`` no longer exists), so the first migration
+        after the swap removes them. The audit log is append-only history and
+        keeps its rows.
+        """
+        keep = ", ".join(f"'{agent.value}'" for agent in AgentType)
+        for table in ("activity_events", "approvals", "transcript_state", "sessions"):
+            cursor = await self.conn.execute(
+                f"DELETE FROM {table} WHERE agent_type NOT IN ({keep})"
+            )
+            await cursor.close()
 
     async def _ensure_columns(self) -> None:
         """Add columns introduced after the first release (idempotent).
@@ -304,9 +320,10 @@ class Database:
             await cursor.close()
             for name, decl in columns.items():
                 if name not in existing:
-                    await self.conn.execute(
+                    cursor = await self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN {name} {decl}"
                     )
+                    await cursor.close()
 
     async def close(self) -> None:
         if self._conn is not None:
