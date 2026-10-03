@@ -56,13 +56,19 @@ def free_port() -> int:
 
 
 @pytest.fixture
-def live_daemon(home: Path) -> int:
+def live_daemon(home: Path, monkeypatch: pytest.MonkeyPatch) -> int:
     """Run a real agentd over HTTP so the hook CLI can be tested end to end."""
     port = free_port()
     config = Config()
     config.server.port = port
     config.agents.codex.hook_timeout_seconds = 10
-    config.agents.codex.hook_timeout_seconds = 10
+
+    # Isolate the daemon's transcript readers from the *real* agents on this
+    # machine: the default watcher would otherwise ingest the user's live
+    # Codex/OpenCode sessions into the test daemon, and their stray change
+    # notices race the tests that listen to the stream.
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex-home"))
+    monkeypatch.setenv("OPENCODE_DB", str(home / "opencode.db"))
 
     # The hook CLI reads config and token from AGENTLINK_HOME.
     (home / "config.toml").write_text(

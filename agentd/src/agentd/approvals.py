@@ -16,6 +16,7 @@ from .audit import AuditLog
 from .config import Config
 from .crypto import action_hash, new_id, redact, redact_text
 from .db import Database
+from .notifier import Notifier
 from .policy import PolicyEngine
 from .protocol import (
     Action,
@@ -56,6 +57,7 @@ class ApprovalManager:
         audit: AuditLog,
         sessions: SessionManager,
         activity: ActivityManager | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._db = db
         self._config = config
@@ -63,6 +65,7 @@ class ApprovalManager:
         self._audit = audit
         self._sessions = sessions
         self._activity = activity
+        self._notifier = notifier
         self._waiters: dict[str, asyncio.Event] = {}
         #: Away mode: nobody is at the phone, so asks are denied immediately
         #: instead of parking the agent for the whole timeout.
@@ -356,6 +359,17 @@ class ApprovalManager:
         # visible to the phone, so a decision must be able to reach us.
         event = asyncio.Event()
         self._waiters[approval_id] = event
+        # Summon the phone (P1-a): this is the moment an agent is parked
+        # waiting for a human. Fire-and-forget; a dead webhook must never
+        # delay a decision.
+        if self._notifier is not None:
+            self._notifier.notify_soon(
+                event="approval_requested",
+                title=f"{action.agent_type.value}: {action.tool.name} needs a decision",
+                body=action.action.command or action.action.summary,
+                agent=action.agent_type.value,
+                session_id=action.session_id,
+            )
         logger.info(
             "approval created id=%s agent=%s tool=%s risk=%s expires=%s",
             approval_id,

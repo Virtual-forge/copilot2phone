@@ -1003,12 +1003,24 @@ async function sendPrompt() {
 function updateComposer() {
   const box = document.getElementById("composer");
   if (!box) return;
+  const field = document.getElementById("promptText");
   const mine = sessionInfo && sessionInfo.agent_type === "opencode" &&
                route().view === "session";
   box.classList.toggle("hidden", !mine);
   if (!mine) {
-    const field = document.getElementById("promptText");
     if (field) field.value = "";
+    return;
+  }
+  // Loud degradation (P1-c): say why input is unavailable instead of
+  // failing on send.
+  const available = sessionInfo.input_available !== false;
+  const send = document.getElementById("promptSend");
+  if (send) send.disabled = !available;
+  if (field) {
+    field.disabled = !available;
+    field.placeholder = available
+      ? "Send a prompt to this session"
+      : "Input unavailable - the OpenCode CLI is not on the PC's PATH";
   }
 }
 

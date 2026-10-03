@@ -208,4 +208,15 @@ Append-only. Newest at the bottom. Each entry: what was decided, why, and where 
 **Spec:** §12.4, §11 (superseded in part).
 **Implemented:** `agentd/src/agentd/opencode_input.py`, `agentd/src/agentd/activity.py`, `agentd/src/agentd/local_api.py`, `agentd/src/agentd/webui.py`, `docs/mobile-app-plan.md`.
 
+## D-027 — The remote summons you: notifications, autostart, loud degradation
+
+**Decision:** Work plan P1 (`docs/work-plan.md`). A best-effort `Notifier` POSTs to a configured webhook on the two moments that need a human: a Codex `approval_requested`, and an OpenCode **turn completion** (a prompt steered from the phone finished). `agentd install` drops a hidden-launch `.vbs` into the *user's* Startup folder so the daemon starts at every logon, with `agentd uninstall` and a `doctor` line. And `SessionDetail.input_available` lets the phone disable the composer with the reason instead of failing on send.
+
+**Why:** The remote is useless if you must watch it: without a notification you only find a parked Codex agent when its 600 s have already burned, and a daemon that dies on reboot kills the phone silently. The Startup folder is the one Windows autostart surface a standard user can write — `schtasks /SC ONLOGON` is denied without elevation (discovered live), so the scheduled task was dropped rather than asking for admin. Turn-completion is announced from the ingest path and only for *newly stored* `task_finished` events, because re-reads refresh old rows and re-announcing a finished turn would cry wolf.
+
+**Consequences:** Notifications are fire-and-forget (`notify_soon` schedules the POST; a dead webhook costs its own 5 s timeout, never a decision or an ingest), never raise, and **redact bodies** (S7) — the webhook is a third party, so `ntfy.sh` topics must be treated as semi-public; a self-hosted ntfy or a private Discord webhook is the right target for command text. Two payload shapes: provider-agnostic JSON, and `ntfy` (topic extracted from the URL, `priority=high` for approvals). The launcher runs `pythonw` so no console flashes at logon; two daemons still conflict on the port, so `doctor` reports whether one is already running. Testing got honest about the real machine: the live e2e daemon now points `CODEX_HOME`/`OPENCODE_DB` at empty temp dirs — it used to ingest the user's *live* sessions mid-suite, which raced the stream test — and transcript tests bump file mtimes to a deterministic future, because `utime(now)` could collide with the write on a fast machine.
+
+**Spec:** §12.5, §15.
+**Implemented:** `agentd/src/agentd/notifier.py`, `agentd/src/agentd/autostart.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/approvals.py`, `agentd/src/agentd/activity.py`, `agentd/src/agentd/cli.py`, `agentd/src/agentd/webui.py`, `docs/work-plan.md`.
+
 

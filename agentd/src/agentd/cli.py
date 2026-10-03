@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import typer
 
-from . import __version__, netinfo, paths, tunnel as tunnel_mod
+from . import __version__, autostart, netinfo, paths, tunnel as tunnel_mod
 from .config import Config, load_config, write_default_config
 from .local_api import create_app, load_or_create_token
 
@@ -274,6 +274,13 @@ def doctor() -> None:
             f"hook_timeout={agent_cfg.hook_timeout_seconds}s"
         )
 
+    webhook = config.notifications.webhook_url
+    notify_state = f"on - {webhook}" if webhook else "off - set [notifications] webhook_url"
+    typer.echo(f"  notify    : [{notify_state}]")
+    if sys.platform == "win32":
+        state = "registered" if autostart.installed() else "not registered - run 'agentd install'"
+        typer.echo(f"  autostart : [{state}]")
+
     if not reachable:
         typer.secho("start it with: agentd run", fg="yellow")
 
@@ -319,9 +326,35 @@ def pair() -> None:
 
 @app.command()
 def install() -> None:
-    """Install the agent hooks (arrives with the adapters in slice 3)."""
-    typer.secho("hook installation is not implemented yet (slice 3)", fg="yellow")
-    raise typer.Exit(code=1)
+    """Install the logon autostart for the daemon (Windows).
+
+    The agent hook itself stays where you wired it; this only makes the
+    daemon survive reboots. Removing it is 'agentd uninstall'.
+    """
+    if sys.platform != "win32":
+        typer.secho("the autostart task is Windows-only for now", fg="red")
+        raise typer.Exit(code=1)
+    try:
+        detail = autostart.install()
+    except Exception as exc:
+        typer.secho(f"could not install the autostart task: {exc}", fg="red")
+        raise typer.Exit(code=1) from None
+    typer.secho(f"  autostart : [ok - {detail}]", fg="green")
+    typer.echo(f"  launcher  : {autostart.launcher_path()}")
+
+
+@app.command()
+def uninstall() -> None:
+    """Remove the logon autostart installed by 'agentd install'."""
+    if sys.platform != "win32":
+        typer.secho("the autostart task is Windows-only for now", fg="red")
+        raise typer.Exit(code=1)
+    try:
+        detail = autostart.uninstall()
+    except Exception as exc:
+        typer.secho(f"could not remove the autostart task: {exc}", fg="red")
+        raise typer.Exit(code=1) from None
+    typer.secho(f"  autostart : [ok - {detail}]", fg="green")
 
 
 def main() -> int:

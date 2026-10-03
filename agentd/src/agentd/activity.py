@@ -23,6 +23,7 @@ from typing import Any
 
 from .crypto import new_id
 from .db import Database
+from .notifier import Notifier
 from .protocol import (
     ActivityEvent,
     ActivityKind,
@@ -52,9 +53,16 @@ class IncomingEvent:
 class ActivityManager:
     """Writes and reads the per-session activity stream."""
 
-    def __init__(self, *, db: Database, sessions: SessionManager) -> None:
+    def __init__(
+        self,
+        *,
+        db: Database,
+        sessions: SessionManager,
+        notifier: Notifier | None = None,
+    ) -> None:
         self._db = db
         self._sessions = sessions
+        self._notifier = notifier
         self._listeners: set[asyncio.Queue] = set()
 
     # --- live change notifications (D-026) ------------------------------
@@ -151,6 +159,22 @@ class ActivityManager:
             )
             await self._db.set_session_activity(
                 session_id=session_id, last_activity_at=latest, message_count=count
+            )
+        # Summon the phone when a steered OpenCode turn finishes (P1-a).
+        # Only genuinely-new events count: a re-read refreshes stored rows,
+        # and re-announcing an old "turn ended" would cry wolf.
+        if (
+            self._notifier is not None
+            and agent_type is AgentType.OPENCODE
+            and any(event.kind is ActivityKind.TASK_FINISHED for event in new)
+        ):
+            summary = await self._sessions.summary(session_id)
+            self._notifier.notify_soon(
+                event="turn_completed",
+                title=f"OpenCode: {(summary.title if summary else '') or session_id}",
+                body="The agent finished its turn.",
+                agent=agent_type.value,
+                session_id=session_id,
             )
         # Wake the live streams: the phone refetches incrementally instead
         # of waiting out the poll interval.

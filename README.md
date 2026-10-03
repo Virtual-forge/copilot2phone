@@ -20,6 +20,8 @@ agent hook  ->  agentd (loopback API)  ->  decision  ->  hook unblocks
 | Codex hook adapter | ✅ slice 1 (contract pending Phase 0) |
 | OpenCode session monitoring (chat + activity, no gating) | ✅ |
 | **Send prompts into OpenCode sessions from the phone** | ✅ (D-026) |
+| **Webhook notifications (approvals + OpenCode turn completions)** | ✅ (D-027) |
+| **Autostart at logon (`agentd install`)** | ✅ (D-027) |
 | `agentlink-sim` (terminal phone) | ✅ slice 1 |
 | Off-LAN access via ngrok tunnel | ✅ `agentd run --tunnel` |
 | Session-centric phone UI (sessions → chat / activity / approvals) | ✅ |
@@ -51,6 +53,7 @@ pip install -e ./sim
 
 agentd doctor          # check the setup
 agentd run             # start the daemon (leave this running)
+agentd install         # optional: start the daemon automatically at logon
 ```
 
 In a second terminal:
@@ -163,6 +166,24 @@ Policy auto-allow / auto-deny decisions — a read inside the workspace, say —
 never become cards, because there would be one per file read. They stay in
 **Activity**.
 
+### Being summoned
+
+You don't have to watch the app. Set a webhook in `~/.agentlink/config.toml`
+and the daemon POSTs when something needs you — a Codex approval request, or
+an OpenCode turn finishing (the prompt you sent from the phone is done):
+
+```toml
+[notifications]
+webhook_url = "https://ntfy.sh/your-secret-topic"   # or any JSON endpoint
+webhook_format = "ntfy"                               # or "generic"
+```
+
+Bodies are redacted before they leave the machine (S7) — a command with an
+embedded token reaches the webhook as `Authorization: ***REDACTED***`. Treat
+public ntfy topics as semi-public, or self-host. `agentd install` makes the
+daemon start at every logon (a hidden launcher in your Startup folder — no
+admin rights needed), and `agentd uninstall` removes it.
+
 ### Typing into a session
 
 OpenCode sessions can be **driven** from the phone (D-026): the composer
@@ -229,14 +250,15 @@ cd agentd
 python -m pytest -q
 ```
 
-165 tests, including a real end-to-end run (a live daemon plus the real hook
+177 tests, including a real end-to-end run (a live daemon plus the real hook
 entrypoint and a real-socket SSE stream), the cross-agent segregation check,
 the tunnel wiring (ngrok is faked, so the suite passes without it
 installed), the transcript readers driven by synthetic Codex rollouts
 (including a resumed thread split across several rollout files, and
 incremental re-scan from persisted high-water marks) and a synthetic
-OpenCode session database, the session-input guard rails, and the chat
-timeline fold run under node against the page's own JavaScript.
+OpenCode session database, the session-input guard rails, the notification
+payload shapes and triggers, and the chat timeline fold run under node
+against the page's own JavaScript.
 
 ## Phase 0
 

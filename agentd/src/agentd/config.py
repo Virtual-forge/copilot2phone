@@ -42,6 +42,21 @@ class ActivityConfig(BaseModel):
     retention_days: int = 7
 
 
+class NotificationsConfig(BaseModel):
+    """Webhook push (P1-a). Empty URL = notifications off."""
+
+    webhook_url: str = ""
+    webhook_format: str = "generic"
+
+    @field_validator("webhook_format")
+    @classmethod
+    def _known_format(cls, value: str) -> str:
+        allowed = {"generic", "ntfy"}
+        if value not in allowed:
+            raise ValueError(f"webhook_format must be one of {sorted(allowed)}")
+        return value
+
+
 class PolicyConfig(BaseModel):
     #: Effect for actions no rule matched: "ask" (default), "deny" or "allow".
     default_effect: str = "ask"
@@ -84,6 +99,7 @@ class Config(BaseModel):
     relay: RelayConfig = Field(default_factory=RelayConfig)
     tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
     approvals: ApprovalsConfig = Field(default_factory=ApprovalsConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
     activity: ActivityConfig = Field(default_factory=ActivityConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
@@ -118,6 +134,10 @@ api_url = "http://127.0.0.1:4040/api/tunnels"
 timeout_seconds = 600       # aligned with hook timeout (D10)
 default_expiry_seconds = 600
 diff_preview_max_lines = 200
+
+[notifications]
+webhook_url = ""            # empty = off. gets POSTs when things need you
+webhook_format = "generic"  # "generic" JSON, or "ntfy" (topic url in webhook_url)
 
 [activity]
 heartbeat_seconds = 60

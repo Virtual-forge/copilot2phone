@@ -282,6 +282,24 @@ async def test_input_503_when_the_cli_is_missing(ctx, client, monkeypatch):
     assert response.status_code == 503
 
 
+async def test_detail_reports_input_availability(ctx, client, monkeypatch):
+    """The composer is disabled with a reason, not a surprise 503 (P1-c)."""
+    from agentd import opencode_input
+
+    await _make_opencode_session(client)
+    await client.post("/v1/events", json=[event(event_id="codex:s1:0")])
+
+    monkeypatch.setattr(opencode_input.shutil, "which", lambda name: "/fake/bin")
+    opencode_detail = (await client.get("/v1/sessions/oc1")).json()
+    assert opencode_detail["input_available"] is True
+    codex_detail = (await client.get("/v1/sessions/s1")).json()
+    assert codex_detail["input_available"] is False  # no input channel yet
+
+    monkeypatch.setattr(opencode_input.shutil, "which", lambda name: None)
+    unavailable = (await client.get("/v1/sessions/oc1")).json()
+    assert unavailable["input_available"] is False
+
+
 # --- live stream (D-026) ------------------------------------------------------
 # The SSE endpoint is exercised over a real socket in test_e2e_slice1.py:
 # in-memory ASGI transports buffer streaming responses, so an infinite event

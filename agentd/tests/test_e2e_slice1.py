@@ -175,7 +175,9 @@ def test_stream_pushes_change_notices(live_daemon):
     with httpx.Client(
         base_url=base, headers=auth_headers(), timeout=15.0
     ) as client:
-        with client.stream("GET", "/v1/stream") as response:
+        with client.stream(
+            "GET", "/v1/stream", params={"session_id": "stream-e2e"}
+        ) as response:
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("text/event-stream")
 

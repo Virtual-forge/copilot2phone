@@ -28,6 +28,7 @@ from .audit import AuditLog
 from .config import Config, load_config
 from .crypto import new_token, redact_text
 from .db import Database
+from .notifier import Notifier
 from .opencode_input import InputUnavailable, OpencodeInput
 from .policy import PolicyEngine
 from .protocol import (
@@ -76,6 +77,7 @@ class AppContext:
     approvals: ApprovalManager
     activity: ActivityManager
     input: OpencodeInput
+    notifier: Notifier
     watcher: TranscriptWatcher | None = None
     started_at: datetime = field(default_factory=utcnow)
 
@@ -128,7 +130,8 @@ async def build_context(
     policy = PolicyEngine(cfg)
     audit = AuditLog(database)
     sessions = SessionManager(database)
-    activity = ActivityManager(db=database, sessions=sessions)
+    notifier = Notifier(cfg)
+    activity = ActivityManager(db=database, sessions=sessions, notifier=notifier)
     approvals = ApprovalManager(
         db=database,
         config=cfg,
@@ -136,6 +139,7 @@ async def build_context(
         audit=audit,
         sessions=sessions,
         activity=activity,
+        notifier=notifier,
     )
     watcher = TranscriptWatcher(activity=activity, sessions=sessions, db=database)
     return AppContext(
@@ -148,6 +152,7 @@ async def build_context(
         approvals=approvals,
         activity=activity,
         input=OpencodeInput(),
+        notifier=notifier,
         watcher=watcher,
     )
 
@@ -392,7 +397,14 @@ def create_app(
             agent_type=summary.agent_type, session_id=session_id,
             limit=limit, tail=tail,
         )
-        return SessionDetail(**summary.model_dump(), messages=messages, events=events)
+        return SessionDetail(
+            **summary.model_dump(),
+            messages=messages,
+            events=events,
+            input_available=(
+                summary.agent_type is AgentType.OPENCODE and ctx.input.available()
+            ),
+        )
 
     @app.get(
         "/v1/sessions/{session_id}/messages",

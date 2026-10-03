@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 from agentd.protocol import ActivityKind, AgentType
@@ -644,6 +645,17 @@ async def test_watcher_merges_resumed_rollouts(ctx, tmp_path):
 # --- incremental scans (high-water marks) ----------------------------------
 
 
+def touch_later(path) -> None:
+    """Bump a file's mtime to a distinctly-future, deterministic moment.
+
+    ``os.utime(path, None)`` stamps "now", which can collide with the file's
+    write time on a fast machine — and the watcher's fingerprint would then
+    miss the change entirely.
+    """
+    future = time.time() + 10
+    os.utime(path, (future, future))
+
+
 async def _last_seq(ctx, session_id: str) -> int:
     cursor = await ctx.db.conn.execute(
         "SELECT last_seq FROM sessions WHERE session_id = ?", (session_id,)
@@ -673,7 +685,7 @@ async def test_watcher_resumes_from_its_marks(ctx, tmp_path):
 
     # The mtime moved (an agent touched the file) but the tail is empty:
     # nothing new, nothing burned.
-    os.utime(rollout, None)
+    touch_later(rollout)
     assert await watcher.scan_once() == 0
     assert await _last_seq(ctx, "abc") == seq_after_first
 
@@ -714,7 +726,7 @@ async def test_reader_version_bump_forces_a_full_refresh(ctx, tmp_path):
 
     await ctx.db.conn.execute("UPDATE transcript_state SET version = version - 1")
     await ctx.db.conn.commit()
-    os.utime(rollout, None)
+    touch_later(rollout)
 
     # Every row is refreshed, none is new.
     assert await watcher.scan_once() == 0

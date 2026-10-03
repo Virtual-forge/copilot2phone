@@ -269,6 +269,10 @@ class SessionDetail(SessionSummary):
 
     messages: list[MessageRecord] = Field(default_factory=list)
     events: list[ActivityEvent] = Field(default_factory=list)
+    #: False when session input cannot be delivered right now (e.g. the
+    #: OpenCode CLI is missing on the PC) — the phone disables the composer
+    #: with the reason instead of failing on send.
+    input_available: bool = False
 
 
 class ActivityEventIn(BaseModel):
