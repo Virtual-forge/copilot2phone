@@ -34,16 +34,19 @@ invoked by the agent itself, not by hand.
 
 | Question | Finding |
 |---|---|
-| Where is the hook configured? (`config.toml` key) | |
-| Exact stdin JSON shape (paste a real capture) | |
-| Tool name field | |
-| Tool input field | |
-| Session id field | |
-| Exit code on allow | |
-| Exit code on block | |
-| Is stderr surfaced to the model? | |
-| Does the hook actually block the tool call? | |
-| Timeout before Codex gives up | |
+| Where is the hook configured? (`config.toml` key) | **`~/.codex/config.toml`**, gated by `[features] hooks = true`; `[[hooks.PreToolUse]]` with `matcher` (e.g. `"*"`) plus `[[hooks.PreToolUse.hooks]]` `{type, command, timeout, statusMessage}`; a `[hooks.state]` block tracks trusted-hashes per hook entry |
+| Exact stdin JSON shape (paste a real capture) | empirical (audit log): `session_id`, `cwd`, `tool_name`, `tool_input` arrive — the tolerant parser in `adapters/codex/mapping.py` matches reality |
+| Tool name field | `tool_name` |
+| Tool input field | `tool_input` |
+| Session id field | `session_id` — and it **matches the rollout session id**, so cards land in the right chat |
+| Exit code on allow | `0` (e2e-verified) |
+| Exit code on block | `2`, reason on stderr (e2e-verified) |
+| Is stderr surfaced to the model? | yes — deny reasons steer the agent (verified live) |
+| Does the hook actually block the tool call? | **yes** (e2e-verified: the hook blocks until decided; the agent waits) |
+| **Does a matching hook replace the built-in approval prompt?** | **yes (confirmed, 2026-10-05)** — with `matcher = "*"` wired, Codex's own approve/deny prompt never appears for matched calls; while the hook blocks, the desktop shows the hook's `statusMessage` instead. The hook *is* the approval UI for those calls |
+| Is there a "fall back to native approval" response? | **unknown — the key open question.** Needs a desktop-UI probe: temporarily point the hook at a script that exits with each candidate code (empty/1/other, JSON variants) and watch whether Codex's own prompt appears |
+| Can pending approvals be observed outside the hook? | **no** — checked `queue_1.sqlite` and `state_5.sqlite`: no approval/permission tables; native pending approvals live only in the desktop UI, so an unhooked "mirror native approvals to the phone" is not buildable from state |
+| Timeout before Codex gives up | hook config carries its own `timeout` (user's is 600s); whether Codex kills or ignores past it — untested |
 
 ## P0-3 — Hook timeout ceiling
 

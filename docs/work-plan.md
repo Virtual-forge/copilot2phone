@@ -73,3 +73,11 @@ Native app shell (PWA suffices), writing to `opencode.db`, input for Codex
   and racing the stream test), and transcript tests bump file mtimes to a
   deterministic future instead of "now". Next: P2a needs your call
   (Tailscale?); P3 probe P0-12 queued.
+- 2026-10-05 — investigated "native Codex prompt disappears with the hook
+  enabled" (user report). Confirmed and documented in P0-2: a matching
+  PreToolUse hook **replaces** the built-in approval prompt; native pending
+  approvals are not observable in Codex's state DBs, so one call can have
+  only one decision-owner. Documented the desktop surface (same web app in
+  a browser / installed as a PWA, or `agentlink-sim`) in the README.
+  Open follow-up if the literal native prompt is wanted back: probe for a
+  hook "fall back to native" response (needs desktop-UI participation).

@@ -166,6 +166,25 @@ Policy auto-allow / auto-deny decisions — a read inside the workspace, say —
 never become cards, because there would be one per file read. They stay in
 **Activity**.
 
+### Two decision surfaces, one decision
+
+A Codex call that needs a decision goes to **one** place: the hook, and
+therefore agentd. Whichever surface answers first wins — and both are the
+same app:
+
+- **the phone** (the whole point), or
+- **the desktop**: open the same URL in a browser on the PC — the app is
+  responsive and every card works with a mouse. Install it from the browser
+  (it's a PWA) and it runs as its own window, one click away. Terminal
+  people can also `agentlink-sim watch` and decide inline.
+
+This matters because a matching `PreToolUse` hook **replaces** Codex's own
+approve/deny prompt for hooked calls (verified — see P0-2 in
+`docs/phase0-findings.md`): the native prompt cannot appear *and* the phone
+decide. If you want the native prompt back for some tools, narrow the
+hook's `matcher` in `~/.codex/config.toml` to the tools you want gated
+remotely, and the rest keep Codex's built-in behavior.
+
 ### Being summoned
 
 You don't have to watch the app. Set a webhook in `~/.agentlink/config.toml`
