@@ -482,29 +482,9 @@ button:disabled { cursor: default; opacity: 0.45; }
   padding: 40px 20px;
   text-align: center;
 }
-.empty-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 52px; height: 52px;
-  border-radius: 14px;
-  border: 1px solid var(--border-strong);
-  color: var(--accent);
-  font-size: 24px;
-  margin-bottom: 10px;
-}
+.empty .composer-wrap { margin-top: 18px; }
 .empty h2 { margin: 0; font-size: 22px; font-weight: 600; }
-.empty p { margin: 0 0 16px; color: var(--faint); font-size: 14px; }
-.btn-primary {
-  padding: 10px 22px;
-  border-radius: var(--radius);
-  background: var(--text);
-  color: var(--bg);
-  font-size: 14px;
-  font-weight: 600;
-  transition: transform 0.1s;
-}
-.btn-primary:active { transform: scale(0.97); }
+.empty p { margin: 0; color: var(--faint); font-size: 14px; }
 
 /* ---------- mobile ---------- */
 

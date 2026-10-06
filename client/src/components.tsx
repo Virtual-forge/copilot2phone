@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import type {
   ModelInfo,
   ModelRef,
@@ -221,17 +221,15 @@ export function ChatView({ items, streaming }: { items: ChatItem[]; streaming: b
   )
 }
 
-/* ---------- empty state ---------- */
+/* ---------- empty state: greeting + composer, no dead-end button ---------- */
 
-export function EmptyState({ onCreate }: { onCreate: () => void }) {
+export function EmptyState({ children }: { children: ReactNode }) {
   return (
     <div className="empty">
       <div className="empty-mark">◧</div>
       <h2>What should we work on?</h2>
       <p>Your OpenCode sessions, live from the desktop.</p>
-      <button className="btn-primary" onClick={onCreate}>
-        Start a session
-      </button>
+      {children}
     </div>
   )
 }

@@ -26,6 +26,9 @@ export function App() {
   const [running, setRunning] = useState<Running>({})
   const [connected, setConnected] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // choices made before a session exists (the greeting screen): applied on create
+  const [pendingModel, setPendingModel] = useState<ModelInfo | undefined>(undefined)
+  const [pendingAgent, setPendingAgent] = useState<string | undefined>(undefined)
 
   const activeSession = sessions.find((s) => s.id === activeId)
   const activeRef = useRef<string | undefined>(undefined)
@@ -181,9 +184,22 @@ export function App() {
 
   const createSession = async (): Promise<string | undefined> => {
     try {
-      const session = await client.session.create()
+      const session = await client.session.create({
+        ...(pendingModel
+          ? {
+              model: {
+                id: pendingModel.id,
+                providerID: pendingModel.providerID,
+                variant: pendingModel.variants[0]?.id,
+              },
+            }
+          : {}),
+        ...(pendingAgent ? { agent: pendingAgent } : {}),
+      })
       await loadSessions()
       setActiveId(session.id)
+      setPendingModel(undefined)
+      setPendingAgent(undefined)
       setSidebarOpen(false)
       return session.id
     } catch (err) {
@@ -193,17 +209,25 @@ export function App() {
   }
 
   const send = async (text: string) => {
-    const id = activeId ?? (await createSession())
-    if (!id) return
-    // optimistic user bubble
-    const tempId = `temp-${Date.now()}`
-    setItems((prev) => [...prev, { kind: "user", id: tempId, text, time: Date.now() }])
+    let id = activeId
+    if (!id) {
+      // the greeting screen: the session is created by the first message
+      id = await createSession()
+      if (!id) return
+    } else {
+      // optimistic bubble only for an existing chat; a fresh one loads from the server
+      setItems((prev) => [
+        ...prev,
+        { kind: "user", id: `temp-${Date.now()}`, text, time: Date.now() },
+      ])
+    }
     setRunning((r) => ({ ...r, [id]: true }))
     try {
       await client.session.prompt({ sessionID: id, text, delivery: "steer" })
     } catch (err) {
       console.error(err)
     }
+    if (activeId === id) await loadMessages(id)
   }
 
   const stop = async () => {
@@ -226,7 +250,11 @@ export function App() {
   }
 
   const pickModel = async (m: ModelInfo) => {
-    if (!activeId) return
+    if (!activeId) {
+      // greeting screen: remember the choice for the session we will create
+      setPendingModel(m)
+      return
+    }
     try {
       await client.session.switchModel({
         sessionID: activeId,
@@ -239,7 +267,10 @@ export function App() {
   }
 
   const pickAgent = async (a: AgentOption) => {
-    if (!activeId) return
+    if (!activeId) {
+      setPendingAgent(a.id)
+      return
+    }
     try {
       await client.session.switchAgent({ sessionID: activeId, agent: a.id })
       await loadSessions()
@@ -261,7 +292,12 @@ export function App() {
           setActiveId(id)
           setSidebarOpen(false)
         }}
-        onCreate={createSession}
+        onCreate={() => {
+          // "New session" returns to the greeting screen; the session is
+          // created by the first message, so no empty sessions pile up.
+          setActiveId(undefined)
+          setSidebarOpen(false)
+        }}
         onDelete={removeSession}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -304,7 +340,24 @@ export function App() {
             />
           </>
         ) : (
-          <EmptyState onCreate={createSession} />
+          <EmptyState>
+            <Composer
+              disabled={!connected}
+              running={false}
+              onSend={send}
+              onStop={stop}
+              model={
+                pendingModel
+                  ? { id: pendingModel.id, providerID: pendingModel.providerID, variant: pendingModel.variants[0]?.id }
+                  : undefined
+              }
+              models={models}
+              onModelPick={pickModel}
+              agent={pendingAgent}
+              agents={agents}
+              onAgentPick={pickAgent}
+            />
+          </EmptyState>
         )}
       </main>
     </div>
