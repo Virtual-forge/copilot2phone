@@ -22,6 +22,7 @@ agent hook  ->  agentd (loopback API)  ->  decision  ->  hook unblocks
 | **Send prompts into OpenCode sessions from the phone** | ✅ (D-026) |
 | **Webhook notifications (approvals + OpenCode turn completions)** | ✅ (D-027) |
 | **Autostart at logon (`agentd install`)** | ✅ (D-027) |
+| **Phone-approvals toggle: native Codex prompt on desktop, cards when away** | ✅ (D-028) |
 | `agentlink-sim` (terminal phone) | ✅ slice 1 |
 | Off-LAN access via ngrok tunnel | ✅ `agentd run --tunnel` |
 | Session-centric phone UI (sessions → chat / activity / approvals) | ✅ |
@@ -166,24 +167,24 @@ Policy auto-allow / auto-deny decisions — a read inside the workspace, say —
 never become cards, because there would be one per file read. They stay in
 **Activity**.
 
-### Two decision surfaces, one decision
+### Native on the desktop, phone when away — one tap
 
-A Codex call that needs a decision goes to **one** place: the hook, and
-therefore agentd. Whichever surface answers first wins — and both are the
-same app:
+Codex approvals have two owners and you choose with one tap (D-028). The
+home screen carries a **Phone approvals: on/off** chip, and
+`agentd remote [--off]` does the same from a terminal. The choice is
+persisted across restarts.
 
-- **the phone** (the whole point), or
-- **the desktop**: open the same URL in a browser on the PC — the app is
-  responsive and every card works with a mouse. Install it from the browser
-  (it's a PWA) and it runs as its own window, one click away. Terminal
-  people can also `agentlink-sim watch` and decide inline.
+- **Off (default)** — the desktop decides: the hook answers Codex's own
+  JSON protocol with `permissionDecision: "ask"`, and Codex shows its
+  native approve/deny prompt, exactly as without a hook. Nothing parks on
+  the phone, and nothing blocks.
+- **On** — you're leaving: approvals park as AgentLink cards on the phone
+  (and the desktop can still decide from the same app in a PC browser, or
+  `agentlink-sim` — the first decision wins either way).
 
-This matters because a matching `PreToolUse` hook **replaces** Codex's own
-approve/deny prompt for hooked calls (verified — see P0-2 in
-`docs/phase0-findings.md`): the native prompt cannot appear *and* the phone
-decide. If you want the native prompt back for some tools, narrow the
-hook's `matcher` in `~/.codex/config.toml` to the tools you want gated
-remotely, and the rest keep Codex's built-in behavior.
+Policy auto-allow (workspace reads) still applies instantly in both modes,
+`[policy] default_effect = "deny"` still hard-denies, and `agentd away`
+denies everything when you want nobody asked at all.
 
 ### Being summoned
 
@@ -244,9 +245,14 @@ into the chat and activity feed.
 2. The policy engine scores it. Reads inside the workspace are allowed
    outright; everything else follows `[policy] default_effect` (`ask` by
    default — D-024).
-3. If asked, the daemon records the approval and **blocks the hook**.
-4. You decide from the phone (or `agentlink-sim`).
-5. The hook exits `0` to allow, or exits `2` (with the reason on stderr,
+3. If asked and the **Phone approvals** toggle is off (D-028), the daemon
+   defers: no approval is created, and the hook hands the decision back
+   with `permissionDecision: "ask"` — Codex's own prompt decides on the
+   desktop.
+4. If asked and the toggle is on, the daemon records the approval and
+   **blocks the hook**.
+5. You decide from the phone (or `agentlink-sim`).
+6. The hook exits `0` to allow, or exits `2` (with the reason on stderr,
    which Codex surfaces to the model) to block.
 
 **Everything fails closed.** If the daemon is unreachable, the payload is

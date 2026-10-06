@@ -66,6 +66,28 @@ def run(stdin_text: str) -> int:
         _emit(adapter.render_deny(action, f"daemon unavailable ({exc})")[0])
         return BLOCK_EXIT
 
+    if outcome.deferred:
+        # Remote approvals are off (D-028): agentd created no approval and
+        # blocked nobody. Answer with Codex's JSON "ask" — permissionDecision
+        # "ask" hands the decision back to the built-in approval prompt, so
+        # the desktop gets its native, refined UI exactly as without a hook.
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "ask",
+                        "permissionDecisionReason": (
+                            "AgentLink: remote approvals are off — deciding on desktop"
+                        ),
+                    }
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
+        return ALLOW_EXIT
+
     if outcome.allowed:
         return ALLOW_EXIT
     _emit(adapter.render_deny(action, outcome.reason or "denied")[0])

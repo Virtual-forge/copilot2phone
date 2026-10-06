@@ -219,4 +219,15 @@ Append-only. Newest at the bottom. Each entry: what was decided, why, and where 
 **Spec:** §12.5, §15.
 **Implemented:** `agentd/src/agentd/notifier.py`, `agentd/src/agentd/autostart.py`, `agentd/src/agentd/config.py`, `agentd/src/agentd/approvals.py`, `agentd/src/agentd/activity.py`, `agentd/src/agentd/cli.py`, `agentd/src/agentd/webui.py`, `docs/work-plan.md`.
 
+## D-028 — Remote approvals are a toggle: native on the desktop, phone when away
+
+**Decision:** Codex approvals have two owners, and you choose with one tap. The `remote` flag (default **off**, persisted in the DB) decides who owns an ASK action: off — the hook answers Codex's JSON protocol with `permissionDecision: "ask"` and Codex's **native, refined desktop prompt** appears, exactly as without a hook; on — approvals park as AgentLink cards on the phone. Flipped from the home screen chip ("Phone approvals: on/off"), `agentd remote [--off]`, or `POST /v1/remote`; the choice survives restarts and reboots.
+
+**Why:** A matching `PreToolUse` hook *is* the approval flow for matched calls (P0-2, confirmed) — while it blocks, Codex shows the hook's statusMessage and the native prompt never appears. Wiring every decision permanently to the phone made sitting at the desktop worse than no AgentLink at all; wiring it permanently to the desktop made leaving the desk blind. The `ask` decision — found as `PreToolUsePermissionDecisionWire`'s value in the `codex.exe` binary strings, Claude Code-parity — is what makes the ownership switchable at runtime instead of requiring config surgery.
+
+**Consequences:** One call still has exactly one decision-owner; the toggle picks which. With remote off, agentd creates no approval record, records no card, and blocks nobody — auto-allow (workspace reads) still applies instantly, `[policy] default_effect` still hard-denies when configured, and `away` still overrides everything (an explicit panic mode denies regardless of where you are). `ApprovalState.DEFERRED` is outcome-only: never stored, never a card. A fresh install defaults to desktop-native. The `ask` semantics are read from Codex's own binary and verified at the hook level e2e; the desktop-side acceptance — the native prompt actually appearing — is the one thing only the user can confirm, since it lives in Codex's UI.
+
+**Spec:** §9, §12.5.
+**Implemented:** `agentd/src/agentd/protocol.py`, `agentd/src/agentd/approvals.py`, `agentd/src/agentd/local_api.py`, `agentd/src/agentd/adapters/codex/hook_cli.py`, `agentd/src/agentd/webui.py`, `agentd/src/agentd/cli.py`.
+
 

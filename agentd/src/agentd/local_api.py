@@ -141,6 +141,7 @@ async def build_context(
         activity=activity,
         notifier=notifier,
     )
+    await approvals.load_remote()
     watcher = TranscriptWatcher(activity=activity, sessions=sessions, db=database)
     return AppContext(
         config=cfg,
@@ -663,6 +664,7 @@ def create_app(
             "started_at": iso(ctx.started_at),
             "uptime_seconds": (now - ctx.started_at).total_seconds(),
             "away": ctx.approvals.away,
+            "remote": ctx.approvals.remote,
             "waiting": ctx.approvals.waiting_count,
             "pending": await ctx.approvals.pending_counts(),
             "db_path": str(ctx.db.path),
@@ -689,6 +691,20 @@ def create_app(
             detail={"enabled": enabled},
         )
         return {"away": ctx.approvals.away}
+
+    @app.post("/v1/remote", dependencies=auth)
+    async def set_remote(
+        enabled: bool = Query(...), ctx: AppContext = Depends(get_ctx)
+    ) -> dict[str, Any]:
+        """Remote approvals gate (D-028): who decides an ASK action.
+
+        ``true`` — the phone decides (AgentLink cards). ``false`` — the
+        agent's own approval UI decides on the desktop (Codex shows its
+        native prompt; the hook answers ``permissionDecision: "ask"``).
+        Persisted across restarts.
+        """
+        await ctx.approvals.set_remote(enabled)
+        return {"remote": ctx.approvals.remote}
 
     # --- audit ------------------------------------------------------------
 

@@ -31,6 +31,9 @@ async def ctx(home: Path) -> AppContext:
     context = await build_context(
         Config(), db_path=home / "agentd.db", token=TEST_TOKEN
     )
+    # Manager-level tests describe the phone-gating behaviour; the
+    # remote-off defer path (D-028) is exercised explicitly per test.
+    context.approvals.remote = True
     try:
         yield context
     finally:
@@ -92,6 +95,15 @@ def live_daemon(home: Path, monkeypatch: pytest.MonkeyPatch) -> int:
         time.sleep(0.05)
     if not server.started:
         raise RuntimeError("agentd did not start in time")
+
+    # The e2e suite describes phone gating; a fresh daemon defaults to
+    # desktop-native approvals (D-028), so switch it on explicitly.
+    httpx.post(
+        f"http://127.0.0.1:{port}/v1/remote",
+        params={"enabled": "true"},
+        headers=auth_headers(),
+        timeout=5.0,
+    )
 
     try:
         yield port

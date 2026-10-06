@@ -313,6 +313,7 @@ let lastRenderedSeq = -1; // seq the chat last rendered at
 let lastApprovalsKey = null;
 let lastTabKey = null;
 let refreshing = false;
+let remoteOn = false;      // phone gating on/off (D-028)
 let tab = "chat";
 
 /* ---------- token ---------- */
@@ -863,6 +864,25 @@ function renderChips(counts) {
     });
     box.appendChild(b);
   });
+
+  /* Phone approvals gate (D-028): off = the desktop's own approval prompt
+     decides (Codex native); on = approvals park here on the phone. One tap,
+     no config editing, persisted across restarts. */
+  const t = document.createElement("button");
+  t.className = "chip remote" + (remoteOn ? " sel" : "");
+  t.innerHTML = "Phone approvals: " + (remoteOn ? "on" : "off");
+  t.addEventListener("click", async () => {
+    try {
+      const res = await api("/v1/remote?enabled=" + (remoteOn ? "false" : "true"), {
+        method: "POST"
+      });
+      remoteOn = !!res.remote;
+      renderChips(counts);
+    } catch (err) {
+      toast("Could not toggle: " + err.message);
+    }
+  });
+  box.appendChild(t);
 }
 
 /* ---------- poll ---------- */
@@ -892,6 +912,7 @@ async function refreshList() {
   const both = await Promise.all([api("/v1/status"), api("/v1/sessions" + q)]);
   const status = both[0];
   const sessions = both[1];
+  remoteOn = !!status.remote;
 
   setHeader("list", null);
   const dot = document.getElementById("dot");

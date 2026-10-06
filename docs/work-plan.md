@@ -55,6 +55,17 @@ restarted by hand after every reboot.
 - ☐ **Diff preview** in Codex approval cards (the hook already carries the
   patch; `ActionDetail.diff_preview` is still unused).
 
+## P5 — Approval ownership toggle (user request, 2026-10-06)
+
+- ☑ **5a. Phone-approvals toggle** (2026-10-06, D-028) — the ask that made
+  this possible was found in `codex.exe` itself: the hook protocol supports
+  `permissionDecision: "ask"`, which hands the decision back to Codex's
+  built-in approval prompt. Off (default) = refined native prompt on the
+  desktop; on = AgentLink cards on the phone. One-tap chip on the home
+  screen, `agentd remote [--off]`, persisted across restarts. Away and
+  `[policy] default_effect` still override. Pending: the user's 30-second
+  desktop acceptance test (native prompt appears with the toggle off).
+
 ## Explicitly not now
 
 Native app shell (PWA suffices), writing to `opencode.db`, input for Codex
@@ -81,3 +92,13 @@ Native app shell (PWA suffices), writing to `opencode.db`, input for Codex
   a browser / installed as a PWA, or `agentlink-sim`) in the README.
   Open follow-up if the literal native prompt is wanted back: probe for a
   hook "fall back to native" response (needs desktop-UI participation).
+- 2026-10-06 — **P5 ☑ (D-028): the phone-approvals toggle.** Found the
+  mechanism in `codex.exe`'s binary strings: the PreToolUse hook protocol
+  has a JSON output with `permissionDecision: "allow" | "deny" | "ask"` —
+  and `ask` hands the decision back to Codex's built-in approval prompt.
+  So the hook now answers `ask` when the toggle is off (native, refined
+  desktop prompt; nothing parks on the phone) and gates on the phone when
+  it is on. One-tap chip on the home screen, `agentd remote [--off]`,
+  `POST /v1/remote`, persisted across restarts. Away and hard-deny policy
+  still override. 184 tests. Pending: the user's 30-second desktop
+  acceptance test.

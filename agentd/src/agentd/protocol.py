@@ -71,6 +71,9 @@ class ApprovalState(str, Enum):
     DENIED = "denied"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
+    #: Outcome-only (D-028): no approval record is created; the desktop's own
+    #: approval UI decides. Never stored in the approvals table.
+    DEFERRED = "deferred"
 
 
 class Decision(str, Enum):
@@ -142,6 +145,10 @@ class ApprovalOutcome(BaseModel):
     risk: Risk
     waited_seconds: float = 0.0
     policy_effect: Effect | None = None
+    #: True when remote approvals are off (D-028): the daemon created no
+    #: approval and blocked for nobody — the hook hands the decision back to
+    #: the agent's own approval UI (Codex: ``permissionDecision: "ask"``).
+    deferred: bool = False
 
     @property
     def allowed(self) -> bool:

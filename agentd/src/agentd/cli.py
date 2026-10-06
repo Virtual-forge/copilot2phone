@@ -304,6 +304,32 @@ def away(
 
 
 @app.command()
+def remote(
+    off: bool = typer.Option(
+        False, "--off", help="Leave remote approvals off (the desktop's own prompt decides)"
+    ),
+) -> None:
+    """Toggle Codex approvals between the phone and the desktop (D-028).
+
+    On: approvals park on the phone as AgentLink cards. Off: the agent's
+    own approval prompt decides on the desktop. The choice is persisted,
+    so it survives daemon restarts and reboots.
+    """
+    config = load_config()
+    token = load_or_create_token()
+    enabled = not off
+    try:
+        with _client(config, token) as client:
+            response = client.post("/v1/remote", params={"enabled": enabled})
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        typer.secho(f"agentd is not reachable at {config.base_url}: {exc}", fg="red")
+        raise typer.Exit(code=1) from None
+    state = "on - approvals go to the phone" if enabled else "off - the desktop's own prompt decides"
+    typer.echo(f"phone approvals: {state}")
+
+
+@app.command()
 def logs(
     lines: int = typer.Option(50, help="How many lines to show"),
 ) -> None:

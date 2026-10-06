@@ -70,6 +70,28 @@ class ApprovalManager:
         #: Away mode: nobody is at the phone, so asks are denied immediately
         #: instead of parking the agent for the whole timeout.
         self.away: bool = False
+        #: Remote approvals (D-028): when False, an ASK is handed straight back
+        #: to the agent's own approval UI — at the desktop, Codex's refined
+        #: native prompt decides and nothing parks on the phone. Loaded from
+        #: the DB at startup so a restart keeps your last choice.
+        self.remote: bool = False
+
+    async def load_remote(self) -> None:
+        """Restore the persisted remote-approvals choice (D-028)."""
+        self.remote = (await self._db.get_meta("remote_approvals")) == "1"
+
+    async def set_remote(self, enabled: bool) -> None:
+        """Choose who decides ASK actions: the phone (True) or the desktop's
+        own approval UI (False). Persisted, so reboots keep it."""
+        self.remote = enabled
+        await self._db.set_meta("remote_approvals", "1" if enabled else "0")
+        await self._audit.write(
+            actor="agentd",
+            action="mode.remote",
+            subject=None,
+            detail={"enabled": enabled},
+        )
+        logger.info("remote approvals %s", "on" if enabled else "off")
 
     async def _record(
         self,
@@ -289,6 +311,30 @@ class ApprovalManager:
                 risk=result.risk,
                 waited_seconds=time.monotonic() - started,
                 policy_effect=result.effect,
+            )
+
+        if not self.remote:
+            # Remote approvals are off (D-028): the desktop owns this one.
+            # Create nothing, park nobody, and tell the hook to hand the
+            # call back to the agent's own approval UI — for Codex that is
+            # the native prompt, which only appears when the hook has no
+            # decision of its own.
+            await self._audit.write(
+                actor="agentd",
+                action="approval.deferred",
+                subject=action.session_id,
+                detail={"tool": action.tool.name, "agent_type": action.agent_type.value},
+            )
+            return ApprovalOutcome(
+                approval_id=new_id(),
+                agent_type=action.agent_type,
+                state=ApprovalState.DEFERRED,
+                decision=None,
+                reason="remote approvals are off — the desktop decides",
+                risk=result.risk,
+                waited_seconds=time.monotonic() - started,
+                policy_effect=result.effect,
+                deferred=True,
             )
 
         return await self._ask(action, result.risk, started)

@@ -104,6 +104,7 @@ async def test_timeout_expires_and_denies(home):
     config = Config()
     config.agents.codex.hook_timeout_seconds = 0.2
     context = await build_context(config, db_path=home / "timeout.db", token="t")
+    context.approvals.remote = True  # phone gating: park and let it expire
     try:
         outcome = await context.approvals.request(make_action(command="ls"))
         assert outcome.state is ApprovalState.EXPIRED
@@ -139,6 +140,7 @@ async def test_deciding_an_expired_approval_is_a_conflict(home):
     config = Config()
     config.agents.codex.hook_timeout_seconds = 0.2
     context = await build_context(config, db_path=home / "expired.db", token="t")
+    context.approvals.remote = True  # phone gating: park and let it expire
     try:
         outcome = await context.approvals.request(make_action(command="ls"))
         assert outcome.state is ApprovalState.EXPIRED
@@ -289,6 +291,60 @@ async def test_failed_insert_closes_the_requested_card(ctx, monkeypatch):
     kinds = [event.kind for event in events]
     assert ActivityKind.APPROVAL_REQUESTED in kinds
     assert ActivityKind.APPROVAL_DECIDED in kinds
+
+
+# --- remote approvals gate (D-028) ------------------------------------------
+
+
+async def test_remote_off_defers_asks_to_the_desktop(ctx):
+    """With phone gating off, an ASK creates no approval and parks nobody:
+    the hook hands the decision back and the desktop's own prompt decides."""
+    ctx.approvals.remote = False
+    outcome = await ctx.approvals.request(make_action(command="ls"))
+    assert outcome.deferred is True
+    assert outcome.state is ApprovalState.DEFERRED
+    assert outcome.decision is None
+    assert outcome.waited_seconds < 1.0
+    # nothing parked, no card recorded
+    assert await ctx.approvals.list(state=ApprovalState.PENDING) == []
+    events = await ctx.activity.events(agent_type=AgentType.CODEX, session_id="s1")
+    assert all(
+        event.kind is not ActivityKind.APPROVAL_REQUESTED for event in events
+    )
+
+
+async def test_remote_off_keeps_policy_decisions(ctx):
+    """Auto-allow still applies instantly: only the ASK path defers."""
+    ctx.approvals.remote = False
+    allowed = await ctx.approvals.request(
+        make_action(ToolKind.FILE_READ, "read_file", paths=[f"{WORKSPACE}/a.py"])
+    )
+    assert allowed.allowed
+    assert not allowed.deferred
+
+
+async def test_away_wins_over_remote_off(ctx):
+    """Away is the explicit panic mode: it denies regardless of the toggle."""
+    ctx.approvals.remote = False
+    ctx.approvals.away = True
+    outcome = await ctx.approvals.request(make_action(command="ls"))
+    assert not outcome.allowed
+    assert not outcome.deferred
+    assert outcome.reason == "away mode is on"
+    ctx.approvals.away = False
+
+
+async def test_remote_choice_survives_a_restart(home):
+    config = Config()
+    first = await build_context(config, db_path=home / "r.db", token="t")
+    await first.approvals.set_remote(True)
+    await first.db.close()
+
+    second = await build_context(Config(), db_path=home / "r.db", token="t")
+    try:
+        assert second.approvals.remote is True
+    finally:
+        await second.db.close()
 
 
 # --- audit ----------------------------------------------------------------

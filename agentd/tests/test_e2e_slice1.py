@@ -198,6 +198,40 @@ def test_stream_pushes_change_notices(live_daemon):
     assert '"session_id": "stream-e2e"' in text
 
 
+# --- remote approvals gate (D-028) -----------------------------------------
+
+
+def test_remote_off_hands_the_decision_back_to_codex(live_daemon):
+    """With phone gating off, the hook answers Codex's JSON 'ask': no
+    approval is parked, and the desktop's own approval prompt decides."""
+    port = live_daemon
+    base = f"http://127.0.0.1:{port}"
+    httpx.post(
+        f"{base}/v1/remote",
+        params={"enabled": "false"},
+        headers=auth_headers(),
+        timeout=5.0,
+    )
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = codex_hook.run(json.dumps(codex_payload()))
+
+    assert code == 0
+    payload = json.loads(buffer.getvalue())
+    assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert payload["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+    pending = httpx.get(
+        f"{base}/v1/approvals",
+        params={"state": "pending"},
+        headers=auth_headers(),
+        timeout=5.0,
+    ).json()
+    assert pending == []
+
+
 # --- fail closed ----------------------------------------------------------
 
 

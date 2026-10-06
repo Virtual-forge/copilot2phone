@@ -181,6 +181,18 @@ async def test_away_toggle(client):
     assert (await client.get("/v1/status")).json()["away"] is False
 
 
+async def test_remote_toggle(client):
+    """The phone-approvals switch (D-028): native prompt on the desktop
+    when off, cards here when on."""
+    response = await client.post("/v1/remote", params={"enabled": True})
+    assert response.json() == {"remote": True}
+    assert (await client.get("/v1/status")).json()["remote"] is True
+
+    off = await client.post("/v1/remote", params={"enabled": False})
+    assert off.json() == {"remote": False}
+    assert (await client.get("/v1/status")).json()["remote"] is False
+
+
 async def test_sessions_endpoint(client):
     await client.post("/v1/approvals", json=read_action())
     sessions = (await client.get("/v1/sessions")).json()
