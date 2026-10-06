@@ -5,7 +5,7 @@ import { OpenCode } from "@opencode/client"
  * service with credentials, so the browser never handles a token. In a
  * production deploy behind a reverse proxy the same setup applies.
  */
-export const client = OpenCode.make({ baseUrl: "" })
+export const client = OpenCode.make({ baseUrl: window.location.origin })
 
 export type {
   SessionInfo,
