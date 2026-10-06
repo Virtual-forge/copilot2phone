@@ -267,7 +267,7 @@ def doctor() -> None:
     else:
         typer.echo("  ngrok     : [not installed - needed for --tunnel]")
 
-    for agent in ("codex", "opencode"):
+    for agent in ("codex",):
         agent_cfg = config.agents.for_agent(agent)
         typer.echo(
             f"  {agent:<9} : enabled={agent_cfg.enabled} "

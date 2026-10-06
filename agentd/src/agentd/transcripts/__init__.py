@@ -11,11 +11,9 @@ from .base import (
     sort_key,
 )
 from .codex import CodexTranscriptReader
-from .opencode import OpencodeTranscriptReader
 
 __all__ = [
     "CodexTranscriptReader",
-    "OpencodeTranscriptReader",
     "READER_VERSION",
     "TranscriptEvent",
     "TranscriptRead",

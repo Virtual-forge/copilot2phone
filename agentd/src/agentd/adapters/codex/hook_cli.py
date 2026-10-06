@@ -44,6 +44,24 @@ def _emit(text: str) -> None:
         sys.stderr.flush()
 
 
+def _decision_json(permission: str, reason: str) -> str:
+    """Codex's stdout JSON contract (P0-2, read from the codex binary):
+    ``permissionDecision`` allow/deny/ask inside ``hookSpecificOutput``.
+    Kept alongside the exit codes — whichever executor honors, honors."""
+    return (
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": permission,
+                    "permissionDecisionReason": reason,
+                }
+            }
+        )
+        + "\n"
+    )
+
+
 def run(stdin_text: str) -> int:
     """Process one hook invocation. Returns the exit code Codex expects."""
     adapter = CodexAdapter()
@@ -72,25 +90,25 @@ def run(stdin_text: str) -> int:
         # "ask" hands the decision back to the built-in approval prompt, so
         # the desktop gets its native, refined UI exactly as without a hook.
         sys.stdout.write(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "ask",
-                        "permissionDecisionReason": (
-                            "AgentLink: remote approvals are off — deciding on desktop"
-                        ),
-                    }
-                }
-            )
-            + "\n"
+            _decision_json("ask", "AgentLink: remote approvals are off — deciding on desktop")
         )
         sys.stdout.flush()
         return ALLOW_EXIT
 
     if outcome.allowed:
+        sys.stdout.write(
+            _decision_json("allow", "AgentLink: allowed from the phone")
+        )
+        sys.stdout.flush()
         return ALLOW_EXIT
-    _emit(adapter.render_deny(action, outcome.reason or "denied")[0])
+
+    reason = outcome.reason or "denied"
+    # Belt and braces (P0-2): the JSON deny on stdout, the exit code 2, and
+    # the reason on stderr — so whichever contract the running Codex build
+    # honors, a phone-deny means "blocked".
+    sys.stdout.write(_decision_json("deny", f"AgentLink: {reason}"))
+    sys.stdout.flush()
+    _emit(adapter.render_deny(action, reason)[0])
     return BLOCK_EXIT
 
 

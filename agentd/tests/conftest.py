@@ -66,12 +66,11 @@ def live_daemon(home: Path, monkeypatch: pytest.MonkeyPatch) -> int:
     config.server.port = port
     config.agents.codex.hook_timeout_seconds = 10
 
-    # Isolate the daemon's transcript readers from the *real* agents on this
-    # machine: the default watcher would otherwise ingest the user's live
-    # Codex/OpenCode sessions into the test daemon, and their stray change
+    # Isolate the daemon's transcript readers from the *real* agents on
+    # this machine: the default watcher would otherwise ingest the user's
+    # live Codex sessions into the test daemon, and their stray change
     # notices race the tests that listen to the stream.
     monkeypatch.setenv("CODEX_HOME", str(home / "codex-home"))
-    monkeypatch.setenv("OPENCODE_DB", str(home / "opencode.db"))
 
     # The hook CLI reads config and token from AGENTLINK_HOME.
     (home / "config.toml").write_text(

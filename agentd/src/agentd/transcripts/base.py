@@ -38,8 +38,7 @@ class TranscriptSession:
     source_path: Path | None = None
     #: A Codex thread can be resumed into a new rollout file that keeps the
     #: same session id. The reader groups those files into one session so
-    #: ``read`` sees the whole conversation in order. OpenCode's source is
-    #: the shared session database, one entry per logical session.
+    #: ``read`` sees the whole conversation in order.
     source_paths: list[Path] = field(default_factory=list)
 
     @property

@@ -150,62 +150,6 @@ async def test_approval_request_summons_the_phone(ctx, monkeypatch):
     assert not outcome.allowed
 
 
-async def test_opencode_turn_completion_summons_the_phone(ctx, monkeypatch):
-    recorder = Recorder()
-    monkeypatch.setattr(ctx.activity, "_notifier", recorder)
-
-    await ctx.activity.ingest(
-        agent_type=_opencode_agent(),
-        session_id="s1",
-        workspace_path=WORKSPACE,
-        title="Fix the parser",
-        events=[
-            IncomingEvent(
-                kind=ActivityKind.TASK_FINISHED,
-                summary="turn ended",
-                ts=None,
-                event_id="oc:s1:1",
-            )
-        ],
-    )
-    assert recorder.sent[0]["event"] == "turn_completed"
-    assert recorder.sent[0]["title"] == "OpenCode: Fix the parser"
-
-    # re-reading the same turn must not cry wolf
-    recorder.sent.clear()
-    await ctx.activity.ingest(
-        agent_type=_opencode_agent(),
-        session_id="s1",
-        workspace_path=WORKSPACE,
-        title="Fix the parser",
-        events=[
-            IncomingEvent(
-                kind=ActivityKind.TASK_FINISHED,
-                summary="turn ended",
-                ts=None,
-                event_id="oc:s1:1",
-            )
-        ],
-    )
-    assert recorder.sent == []
-
-    # and codex turns stay silent (its channel is approvals, not prompts)
-    await ctx.activity.ingest(
-        agent_type=_codex_agent(),
-        session_id="s2",
-        workspace_path=WORKSPACE,
-        events=[
-            IncomingEvent(
-                kind=ActivityKind.TASK_FINISHED,
-                summary="turn ended",
-                ts=None,
-                event_id="cx:s2:1",
-            )
-        ],
-    )
-    assert recorder.sent == []
-
-
 # --- helpers ---------------------------------------------------------------
 
 
@@ -225,9 +169,3 @@ def _codex_agent():
     from agentd.protocol import AgentType
 
     return AgentType.CODEX
-
-
-def _opencode_agent():
-    from agentd.protocol import AgentType
-
-    return AgentType.OPENCODE

@@ -77,17 +77,13 @@ class AgentConfig(BaseModel):
 
 class AgentsConfig(BaseModel):
     codex: AgentConfig = Field(default_factory=AgentConfig)
-    #: OpenCode is monitor-only (D-025): it has no AgentLink hook, so the
-    #: timeout fields are meaningless for it — it is here so `enabled`
-    #: shows up in status/doctor like any other agent.
-    opencode: AgentConfig = Field(default_factory=AgentConfig)
 
     def for_agent(self, agent_type: str) -> AgentConfig:
         # Never a raw getattr(): ``for_agent("for_agent")`` must not return
         # this method itself.
-        if agent_type not in ("codex", "opencode"):
+        if agent_type != "codex":
             return AgentConfig()
-        return getattr(self, agent_type)
+        return getattr(self, "codex")
 
 
 class LoggingConfig(BaseModel):
@@ -149,9 +145,6 @@ default_effect = "ask"      # fail closed
 [agents.codex]
 enabled = true
 hook_timeout_seconds = 600
-
-[agents.opencode]
-enabled = true                 # monitor-only: no hook, timeouts do not apply
 
 [logging]
 level = "info"

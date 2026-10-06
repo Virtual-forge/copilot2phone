@@ -29,7 +29,6 @@ from .config import Config, load_config
 from .crypto import new_token, redact_text
 from .db import Database
 from .notifier import Notifier
-from .opencode_input import InputUnavailable, OpencodeInput
 from .policy import PolicyEngine
 from .protocol import (
     Action,
@@ -43,7 +42,6 @@ from .protocol import (
     MessageRecord,
     MessageRole,
     SessionDetail,
-    SessionInputRequest,
     SessionSummary,
     iso,
     utcnow,
@@ -76,7 +74,6 @@ class AppContext:
     sessions: SessionManager
     approvals: ApprovalManager
     activity: ActivityManager
-    input: OpencodeInput
     notifier: Notifier
     watcher: TranscriptWatcher | None = None
     started_at: datetime = field(default_factory=utcnow)
@@ -131,7 +128,7 @@ async def build_context(
     audit = AuditLog(database)
     sessions = SessionManager(database)
     notifier = Notifier(cfg)
-    activity = ActivityManager(db=database, sessions=sessions, notifier=notifier)
+    activity = ActivityManager(db=database, sessions=sessions)
     approvals = ApprovalManager(
         db=database,
         config=cfg,
@@ -152,7 +149,6 @@ async def build_context(
         sessions=sessions,
         approvals=approvals,
         activity=activity,
-        input=OpencodeInput(),
         notifier=notifier,
         watcher=watcher,
     )
@@ -398,14 +394,7 @@ def create_app(
             agent_type=summary.agent_type, session_id=session_id,
             limit=limit, tail=tail,
         )
-        return SessionDetail(
-            **summary.model_dump(),
-            messages=messages,
-            events=events,
-            input_available=(
-                summary.agent_type is AgentType.OPENCODE and ctx.input.available()
-            ),
-        )
+        return SessionDetail(**summary.model_dump(), messages=messages, events=events)
 
     @app.get(
         "/v1/sessions/{session_id}/messages",
@@ -484,59 +473,6 @@ def create_app(
                 events=batch,
             )
         return {"received": len(events), "inserted": inserted}
-
-    # --- session input (D-026) ----------------------------------------------
-
-    @app.post(
-        "/v1/sessions/{session_id}/input",
-        dependencies=auth,
-    )
-    async def send_session_input(
-        session_id: str,
-        body: SessionInputRequest,
-        ctx: AppContext = Depends(get_ctx),
-    ) -> dict[str, Any]:
-        """Send a prompt into a running agent session from the phone.
-
-        Only OpenCode sessions: the prompt is delivered through OpenCode's
-        background service (the same one the desktop TUI uses), so the turn
-        runs on the desktop and the transcript reader carries it back to the
-        phone. Delivery is fire-and-forget — the endpoint returns as soon as
-        the prompt is queued, and the reply streams in through the chat.
-        """
-        summary = await ctx.sessions.summary(session_id)
-        if summary is None:
-            raise HTTPException(status_code=404, detail="session not found")
-        if summary.agent_type is not AgentType.OPENCODE:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"input is not supported for {summary.agent_type.value} "
-                    "sessions yet"
-                ),
-            )
-        text = body.text.strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="empty prompt")
-        if ctx.input.in_flight(session_id):
-            raise HTTPException(
-                status_code=409,
-                detail="a prompt is already running in this session",
-            )
-        try:
-            ctx.input.submit(session_id, text)
-        except InputUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from None
-        await ctx.audit.write(
-            actor="phone",
-            action="input.sent",
-            subject=session_id,
-            detail={
-                "agent_type": AgentType.OPENCODE.value,
-                "text": redact_text(text),
-            },
-        )
-        return {"queued": True, "session_id": session_id}
 
     # --- live stream (D-026) -------------------------------------------------
 

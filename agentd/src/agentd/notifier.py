@@ -1,9 +1,8 @@
 """Best-effort webhook notifications (work plan P1-a).
 
 The point of the remote is that you do not have to watch it: when a Codex
-action is waiting on you, or an OpenCode turn you steered from the phone
-finishes, agentd POSTs a notification to your webhook — ntfy, Pushover, a
-private Discord webhook, anything that accepts JSON.
+action is waiting on you, agentd POSTs a notification to your webhook —
+ntfy, Pushover, a private Discord webhook, anything that accepts JSON.
 
 Rules of the road:
 

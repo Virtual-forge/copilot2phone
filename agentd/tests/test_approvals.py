@@ -173,48 +173,6 @@ async def test_cancel_all_fails_closed(ctx):
 # --- partitioning ---------------------------------------------------------
 
 
-async def test_pending_counts_are_partitioned_by_agent(ctx):
-    codex = asyncio.create_task(ctx.approvals.request(make_action(command="ls")))
-    opencode = asyncio.create_task(
-        ctx.approvals.request(
-            make_action(name="bash", agent=AgentType.OPENCODE, session="s2", command="ls")
-        )
-    )
-    await wait_for_pending(ctx.approvals, count=2)
-
-    counts = await ctx.approvals.pending_counts()
-    assert counts == {"codex": 1, "opencode": 1}
-
-    codex_records = await ctx.approvals.list(agent_type=AgentType.CODEX)
-    opencode_records = await ctx.approvals.list(agent_type=AgentType.OPENCODE)
-    assert len(codex_records) == 1
-    assert len(opencode_records) == 1
-    assert codex_records[0].agent_type is AgentType.CODEX
-    assert opencode_records[0].agent_type is AgentType.OPENCODE
-
-    await ctx.approvals.cancel_all()
-    await asyncio.gather(codex, opencode)
-
-
-async def test_sessions_are_recorded_per_agent(ctx):
-    await ctx.approvals.request(
-        make_action(ToolKind.FILE_READ, "read_file", paths=[f"{WORKSPACE}/a.py"])
-    )
-    await ctx.approvals.request(
-        make_action(
-            ToolKind.FILE_READ,
-            "read_file",
-            agent=AgentType.OPENCODE,
-            session="s2",
-            paths=[f"{WORKSPACE}/b.py"],
-        )
-    )
-    codex_sessions = await ctx.sessions.summaries(AgentType.CODEX)
-    opencode_sessions = await ctx.sessions.summaries(AgentType.OPENCODE)
-    assert [s.session_id for s in codex_sessions] == ["s1"]
-    assert [s.session_id for s in opencode_sessions] == ["s2"]
-
-
 # --- config contracts -------------------------------------------------------
 
 

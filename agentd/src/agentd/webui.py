@@ -101,7 +101,6 @@ PAGE = r"""<!doctype html>
     border: 1px solid transparent;
   }
   .badge.codex { color: #c3a9f7; background: rgba(179,146,240,.1); border-color: rgba(179,146,240,.3); }
-  .badge.opencode { color: #58d6e0; background: rgba(88,214,224,.1); border-color: rgba(88,214,224,.3); }
   .badge.low { color: #6fdd8b; background: rgba(63,185,80,.1); border-color: rgba(63,185,80,.3); }
   .badge.medium { color: #ecb46b; background: rgba(224,164,88,.1); border-color: rgba(224,164,88,.3); }
   .badge.high { color: #ff918a; background: rgba(244,112,103,.12); border-color: rgba(244,112,103,.35); }
@@ -149,26 +148,10 @@ PAGE = r"""<!doctype html>
     background: var(--bg); color: var(--fg); font: 13.5px var(--mono);
   }
   .hidden { display: none !important; }
-  .toast {
     position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
     background: var(--card-2); border: 1px solid var(--line); color: var(--fg);
     padding: 10px 16px; border-radius: 6px; font-size: 13.5px; z-index: 60;
     box-shadow: 0 10px 32px rgba(0,0,0,.55);
-  }
-  /* session input (D-026): a composer under the chat, opencode sessions only */
-  .composer {
-    display: flex; gap: 8px; align-items: flex-end;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-    background: var(--bg); border-top: 1px solid var(--line);
-  }
-  .composer textarea {
-    flex: 1; resize: none; border-radius: 7px; border: 1px solid var(--line);
-    background: var(--card); color: var(--fg); font: 14.5px/1.45 inherit;
-    font-family: inherit; padding: 11px 12px; min-height: 43px; max-height: 32vh;
-  }
-  .composer textarea:focus { outline: none; border-color: var(--accent-line); }
-  .composer button {
-    flex: none; width: auto; padding: 12px 20px;
   }
   /* chat */
   .chat { display: flex; flex-direction: column; gap: 12px; }
@@ -266,12 +249,6 @@ PAGE = r"""<!doctype html>
   <div class="tabs hidden" id="tabs"></div>
 </header>
 <main id="main"></main>
-
-<div class="composer hidden" id="composer">
-  <textarea id="promptText" rows="1" placeholder="Send a prompt to this session"
-            autocapitalize="sentences" autocomplete="off" spellcheck="false"></textarea>
-  <button class="primary" id="promptSend">Send</button>
-</div>
 
 <div class="overlay hidden" id="gate">
   <div class="card">
@@ -623,7 +600,7 @@ function renderSessions(items) {
   main.innerHTML = "";
   if (!items.length) {
     main.innerHTML =
-      '<div class="empty">No sessions yet.<br>Start Codex or OpenCode and they will show up here.</div>';
+      '<div class="empty">No sessions yet.<br>Start Codex and they will show up here.</div>';
     return;
   }
   items.forEach(s => main.appendChild(sessionCard(s)));
@@ -846,12 +823,12 @@ function setHeader(view, detail) {
 
 /* ---------- filter chips ---------- */
 function renderChips(counts) {
-  const defs = [["all", "All"], ["codex", "Codex"], ["opencode", "OpenCode"]];
+  const defs = [["all", "All"], ["codex", "Codex"]];
   const box = document.getElementById("chips");
   box.innerHTML = "";
   defs.forEach(([key, label]) => {
     const n = key === "all"
-      ? (counts.codex || 0) + (counts.opencode || 0)
+      ? (counts.codex || 0)
       : (counts[key] || 0);
     const b = document.createElement("button");
     b.className = "chip" + (filter === key ? " sel" : "");
@@ -903,7 +880,6 @@ async function refresh() {
     if (hdr) hdr.textContent = "offline";
   } finally {
     refreshing = false;
-    updateComposer();
   }
 }
 
@@ -1000,51 +976,6 @@ function tickCountdowns() {
 }
 setInterval(tickCountdowns, 1000);
 
-/* ---------- session input (D-026) ---------- */
-
-async function sendPrompt() {
-  const box = document.getElementById("promptText");
-  const text = box.value.trim();
-  if (!text) return;
-  const id = route().id;
-  if (!id) return;
-  try {
-    await api("/v1/sessions/" + encodeURIComponent(id) + "/input", {
-      method: "POST",
-      body: JSON.stringify({ text: text })
-    });
-    box.value = "";
-    box.style.height = "auto";
-    toast("Prompt sent — the reply will stream into the chat");
-  } catch (err) {
-    toast("Could not send: " + err.message);
-  }
-}
-
-function updateComposer() {
-  const box = document.getElementById("composer");
-  if (!box) return;
-  const field = document.getElementById("promptText");
-  const mine = sessionInfo && sessionInfo.agent_type === "opencode" &&
-               route().view === "session";
-  box.classList.toggle("hidden", !mine);
-  if (!mine) {
-    if (field) field.value = "";
-    return;
-  }
-  // Loud degradation (P1-c): say why input is unavailable instead of
-  // failing on send.
-  const available = sessionInfo.input_available !== false;
-  const send = document.getElementById("promptSend");
-  if (send) send.disabled = !available;
-  if (field) {
-    field.disabled = !available;
-    field.placeholder = available
-      ? "Send a prompt to this session"
-      : "Input unavailable - the OpenCode CLI is not on the PC's PATH";
-  }
-}
-
 /* ---------- live stream (D-026) ----------
    The SSE endpoint pushes a tiny "something changed" notice per ingest; the
    fetch-based reader (EventSource cannot send the Authorization header)
@@ -1126,15 +1057,6 @@ window.addEventListener("hashchange", () => {
 if (!token) showGate("");
 refresh();
 setInterval(refresh, POLL_MS);
-
-document.getElementById("promptSend").addEventListener("click", sendPrompt);
-document.getElementById("promptText").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
-});
-document.getElementById("promptText").addEventListener("input", e => {
-  e.target.style.height = "auto";
-  e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.32) + "px";
-});
 
 startStream();
 

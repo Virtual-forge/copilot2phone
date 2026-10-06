@@ -17,16 +17,6 @@ def command_action(**detail) -> dict:
     }
 
 
-def opencode_action() -> dict:
-    return {
-        "agent_type": "opencode",
-        "session_id": "s2",
-        "workspace_path": WORKSPACE,
-        "tool": {"name": "bash", "kind": "command"},
-        "action": {"summary": "ls", "command": "ls"},
-    }
-
-
 def read_action() -> dict:
     return {
         "agent_type": "codex",
@@ -134,25 +124,6 @@ async def test_double_decide_is_409(client):
     await asyncio.wait_for(task, timeout=5)
 
 
-async def test_list_filters_by_agent(client):
-    codex = asyncio.create_task(client.post("/v1/approvals", json=command_action()))
-    opencode = asyncio.create_task(client.post("/v1/approvals", json=opencode_action()))
-    await poll_pending(client, count=2)
-
-    codex_list = (await client.get("/v1/approvals", params={"agent_type": "codex"})).json()
-    opencode_list = (await client.get("/v1/approvals", params={"agent_type": "opencode"})).json()
-    assert len(codex_list) == 1
-    assert codex_list[0]["agent_type"] == "codex"
-    assert len(opencode_list) == 1
-    assert opencode_list[0]["agent_type"] == "opencode"
-
-    for item in codex_list + opencode_list:
-        await client.post(
-            f"/v1/approvals/{item['approval_id']}/decision", json={"decision": "deny"}
-        )
-    await asyncio.gather(codex, opencode)
-
-
 # --- status / sessions / audit -------------------------------------------
 
 
@@ -161,10 +132,9 @@ async def test_status_reports_pending_per_agent(client):
     pending = await poll_pending(client)
 
     status = (await client.get("/v1/status")).json()
-    assert status["pending"] == {"codex": 1, "opencode": 0}
+    assert status["pending"] == {"codex": 1}
     assert status["waiting"] == 1
     assert status["agents"]["codex"]["enabled"] is True
-    assert status["agents"]["opencode"]["enabled"] is True
 
     await client.post(
         f"/v1/approvals/{pending[0]['approval_id']}/decision", json={"decision": "deny"}
@@ -245,18 +215,3 @@ async def test_phone_ui_decision_flow(client):
 
     outcome = (await asyncio.wait_for(task, timeout=5)).json()
     assert outcome["decision"] == "allow"
-
-
-async def test_phone_ui_filter_by_agent(client):
-    """The Codex/OpenCode chips map onto the agent_type query parameter."""
-    asyncio.create_task(client.post("/v1/approvals", json=command_action()))
-    asyncio.create_task(client.post("/v1/approvals", json=opencode_action()))
-    await poll_pending(client, count=2)
-
-    codex_only = (await client.get("/v1/approvals", params={"agent_type": "codex"})).json()
-    assert [item["agent_type"] for item in codex_only] == ["codex"]
-
-    opencode_only = (await client.get("/v1/approvals", params={"agent_type": "opencode"})).json()
-    assert [item["agent_type"] for item in opencode_only] == ["opencode"]
-
-
