@@ -2,3 +2,5 @@
 # client
 client/node_modules/
 client/dist/
+inspect_sdk.py
+inspect_service.py
