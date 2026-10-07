@@ -470,6 +470,168 @@ button:disabled { cursor: default; opacity: 0.45; }
   color: var(--faint);
 }
 
+/* ---------- settings menu + panels (MCP, skills) ---------- */
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--dim);
+  font-size: 17px;
+  line-height: 1;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+
+.menu-right { left: auto; right: 0; bottom: auto; top: calc(100% + 6px); }
+
+.scrim-high {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #00000077;
+}
+
+.panel-host {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(94vw, 440px);
+  z-index: 70;
+  background: var(--bg-deep);
+  border-left: 1px solid var(--border);
+  box-shadow: -16px 0 48px #00000088;
+  overflow-y: auto;
+  padding: 14px 16px calc(20px + env(safe-area-inset-bottom));
+}
+
+.panel { display: flex; flex-direction: column; gap: 10px; }
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.panel-actions { display: flex; gap: 6px; }
+
+.btn-ghost {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+  transition: background 0.12s;
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.btn-ghost.danger:hover:not(:disabled) { color: var(--danger); border-color: #ef6c4d44; }
+
+.panel-error {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: #ef6c4d14;
+  border: 1px solid #ef6c4d33;
+  color: #ff9179;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+.panel-note {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border-strong);
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+.panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.panel-form .field {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13.5px/1.45 var(--font);
+  outline: none;
+  resize: vertical;
+}
+.panel-form .field:focus { border-color: var(--accent); }
+.form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-primary {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #06130a;
+  font-size: 13px;
+  font-weight: 650;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+.seg { display: flex; gap: 6px; }
+.seg-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.seg-btn.sel {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.panel-list { display: flex; flex-direction: column; gap: 6px; }
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.panel-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.panel-row-name { font-size: 13.5px; font-weight: 550; color: var(--text); }
+.panel-row-sub {
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.panel-row-actions { display: flex; gap: 6px; flex: none; }
+.panel-resources {
+  flex-basis: 100%;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.panel-resource {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+.panel-empty { padding: 20px 12px; font-size: 13px; color: var(--faint); text-align: center; }
+
 /* ---------- empty state ---------- */
 
 .empty {

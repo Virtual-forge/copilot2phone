@@ -11,6 +11,7 @@ import type {
 import { ChatView, EmptyState, Sidebar } from "./components"
 import type { AgentOption, ChatItem } from "./types"
 import { Composer } from "./composer"
+import { SettingsMenu, SettingsPanel, type Panel } from "./settings"
 import { toChatItems } from "./types"
 
 const DEFAULT_DIRECTORY = ""
@@ -26,6 +27,7 @@ export function App() {
   const [running, setRunning] = useState<Running>({})
   const [connected, setConnected] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [panel, setPanel] = useState<Panel>(null)
   // choices made before a session exists (the greeting screen): applied on create
   const [pendingModel, setPendingModel] = useState<ModelInfo | undefined>(undefined)
   const [pendingAgent, setPendingAgent] = useState<string | undefined>(undefined)
@@ -320,6 +322,13 @@ export function App() {
             <span className={"conn " + (connected ? "on" : "off")}>
               {connected ? "live" : "offline"}
             </span>
+            {activeId && (
+              <SettingsMenu
+                open={panel !== null}
+                setOpen={(open) => setPanel(open ? "mcp" : null)}
+                onOpen={(p) => setPanel(p)}
+              />
+            )}
           </div>
         </header>
 
@@ -360,6 +369,12 @@ export function App() {
           </EmptyState>
         )}
       </main>
+
+      <SettingsPanel
+        panel={panel}
+        sessionDirectory={activeSession?.location?.directory}
+        onClose={() => setPanel(null)}
+      />
     </div>
   )
 }
