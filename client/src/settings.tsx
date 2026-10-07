@@ -34,13 +34,13 @@ export type Panel = "mcp" | "skills" | null
 
 export function SettingsMenu({
   onOpen,
-  open,
-  setOpen,
 }: {
   onOpen: (panel: Exclude<Panel, null>) => void
-  open: boolean
-  setOpen: (open: boolean) => void
 }) {
+  // Internal open state: deliberately NOT tied to the panel — tying them
+  // meant the menu stayed open behind the panel and every click inside the
+  // panel hit this menu's outside-handler, closing the panel instantly.
+  const [open, setOpen] = useState(false)
   const ref = useOutside(() => setOpen(false))
   return (
     <div className="picker" ref={ref}>
@@ -62,7 +62,7 @@ export function SettingsMenu({
           >
             <span className="picker-item-name">MCP servers</span>
             <span className="picker-item-provider">
-              add, remove, connect, resources
+              add, edit, remove, connect, resources
             </span>
           </button>
           <button
@@ -85,19 +85,39 @@ export function SettingsMenu({
 
 /* ---------- MCP panel ---------- */
 
-function McpAddForm({
-  onAdd,
+type McpConfigShape = {
+  type?: string
+  url?: string
+  command?: string[]
+  cwd?: string
+  environment?: Record<string, string>
+}
+
+function McpForm({
+  initialName,
+  initialConfig,
+  onSubmit,
   onClose,
 }: {
-  onAdd: (name: string, config: Record<string, unknown>) => void
+  initialName?: string
+  initialConfig?: McpConfigShape | null
+  onSubmit: (name: string, config: Record<string, unknown>) => void
   onClose: () => void
 }) {
-  const [name, setName] = useState("")
-  const [type, setType] = useState<"local" | "remote">("remote")
-  const [url, setUrl] = useState("")
-  const [command, setCommand] = useState("")
-  const [cwd, setCwd] = useState("")
-  const [env, setEnv] = useState("")
+  const editing = Boolean(initialName)
+  const initial: McpConfigShape = initialConfig ?? {}
+  const [name, setName] = useState(initialName ?? "")
+  const [type, setType] = useState<"local" | "remote">(
+    initial.type === "local" ? "local" : "remote",
+  )
+  const [url, setUrl] = useState(initial.url ?? "")
+  const [command, setCommand] = useState((initial.command ?? []).join(" "))
+  const [cwd, setCwd] = useState(initial.cwd ?? "")
+  const [env, setEnv] = useState(
+    Object.entries(initial.environment ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n"),
+  )
 
   const submit = () => {
     const trimmed = name.trim()
@@ -125,7 +145,7 @@ function McpAddForm({
       }
       if (Object.keys(environment).length) config.environment = environment
     }
-    onAdd(trimmed, config)
+    onSubmit(trimmed, config)
     onClose()
   }
 
@@ -135,6 +155,7 @@ function McpAddForm({
         className="field"
         placeholder="name (e.g. github)"
         value={name}
+        disabled={editing}
         onChange={(e) => setName(e.target.value)}
       />
       <div className="seg">
@@ -186,7 +207,7 @@ function McpAddForm({
           Cancel
         </button>
         <button className="btn-primary" onClick={submit}>
-          Add server
+          {editing ? "Save changes" : "Add server"}
         </button>
       </div>
     </div>
@@ -201,9 +222,11 @@ export function McpPanel({
   onClose: () => void
 }) {
   const [servers, setServers] = useState<McpServer[]>([])
+  const [configs, setConfigs] = useState<Record<string, McpConfigShape>>({})
   const [resources, setResources] = useState<Record<string, { name: string; uri: string }[]>>({})
   const [showResources, setShowResources] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -215,6 +238,21 @@ export function McpPanel({
     try {
       const res = await client.mcp.list(location)
       setServers(res.data)
+      // pre-fill source for Edit: the config layers carry mcp.servers
+      try {
+        const cfg = await client.config.get()
+        const layers = (
+          Array.isArray(cfg) ? cfg : ((cfg as { data?: unknown }).data ?? [])
+        ) as Array<{ info?: { mcp?: { servers?: Record<string, McpConfigShape> } } }>
+        const merged: Record<string, McpConfigShape> = {}
+        for (const layer of layers) {
+          const servers = layer?.info?.mcp?.servers
+          if (servers && typeof servers === "object") Object.assign(merged, servers)
+        }
+        setConfigs(merged)
+      } catch {
+        /* pre-fill is best-effort */
+      }
       setError(null)
     } catch (err) {
       setError(String(err))
@@ -225,7 +263,7 @@ export function McpPanel({
     load()
   }, [sessionDirectory])
 
-  const add = async (name: string, config: Record<string, unknown>) => {
+  const upsert = async (name: string, config: Record<string, unknown>) => {
     setBusy(name)
     try {
       await client.mcp.add({ server: name, config, ...location } as never)
@@ -292,7 +330,13 @@ export function McpPanel({
           <button className="btn-ghost" onClick={loadResources}>
             {showResources ? "Hide resources" : "Resources"}
           </button>
-          <button className="btn-ghost" onClick={() => setAdding(!adding)}>
+          <button
+            className="btn-ghost"
+            onClick={() => {
+              setAdding(!adding)
+              setEditing(null)
+            }}
+          >
             {adding ? "Close" : "Add"}
           </button>
           <button className="btn-ghost" onClick={onClose}>
@@ -304,9 +348,14 @@ export function McpPanel({
       {error && <div className="panel-error">{error}</div>}
 
       {adding && (
-        <McpAddForm
-          onAdd={add}
-          onClose={() => setAdding(false)}
+        <McpForm onSubmit={upsert} onClose={() => setAdding(false)} />
+      )}
+      {editing && (
+        <McpForm
+          initialName={editing}
+          initialConfig={configs[editing] ?? null}
+          onSubmit={upsert}
+          onClose={() => setEditing(null)}
         />
       )}
 
@@ -323,6 +372,16 @@ export function McpPanel({
               </span>
             </div>
             <div className="panel-row-actions">
+              <button
+                className="btn-ghost"
+                disabled={busy === s.name}
+                onClick={() => {
+                  setEditing(s.name)
+                  setAdding(false)
+                }}
+              >
+                Edit
+              </button>
               {s.status.status !== "pending" && (
                 <button
                   className="btn-ghost"
@@ -465,7 +524,7 @@ export function SkillsPanel({
   const add = async (name: string, description: string, instructions: string) => {
     setBusy(name)
     try {
-      const dir = skillDirFor(skills[0]?.path)
+      const dir = skillDirFor(skills[0]?.path) || sessionDirectory || ""
       const target = `${dir.replace(/\\/g, "/").replace(/\/$/, "")}/.opencode/skills/${name}/SKILL.md`
       const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n${instructions || description}\n`
       const bytes = new TextEncoder().encode(content)
@@ -483,11 +542,8 @@ export function SkillsPanel({
     try {
       // no fs/delete in the API: run the removal through the shell API
       const dir = skillDirFor(skill.path)
-      const parent = skill.path.replace(/\\/g, "/").split("/").slice(0, -1).join("/")
-      const isProject = parent.includes("/.opencode/skills/")
-      const command = isProject
-        ? `Remove-Item -Recurse -Force '${skill.path.replace(/\//g, "\\")}'`
-        : `Remove-Item -Recurse -Force '${skill.path.replace(/\//g, "\\")}'`
+      const winPath = skill.path.replace(/\//g, "\\")
+      const command = `Remove-Item -Recurse -Force '${winPath}'`
       await client.shell.create(
         { command, ...(dir ? { location: { directory: dir } } : {}) } as never,
       )

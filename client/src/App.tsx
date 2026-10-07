@@ -323,11 +323,7 @@ export function App() {
               {connected ? "live" : "offline"}
             </span>
             {activeId && (
-              <SettingsMenu
-                open={panel !== null}
-                setOpen={(open) => setPanel(open ? "mcp" : null)}
-                onOpen={(p) => setPanel(p)}
-              />
+              <SettingsMenu onOpen={(p) => setPanel(p)} />
             )}
           </div>
         </header>
