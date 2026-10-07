@@ -36,6 +36,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
+    allowedHosts: ["footbath-handshake-devouring.ngrok-free.dev"],
     proxy: {
       "/api": { target: service.target, headers: authHeaders, changeOrigin: false },
       "/auth": { target: service.target, headers: authHeaders, changeOrigin: false },

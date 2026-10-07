@@ -58,18 +58,56 @@ function blocksOf(message: SessionMessageAssistant): Block[] {
       if (p.text)
         blocks.push({ type: "reasoning", ordinal: ordinal(part, i), text: p.text })
     } else if (part.type === "tool") {
-      const p = part as SessionMessageAssistantTool
-      blocks.push({
-        type: "tool",
-        ordinal: ordinal(part, i),
-        toolId: p.id,
-        name: p.name,
-        state: "state" in p ? String((p as { state?: { type?: string } }).state?.type ?? "running") : "running",
-        input: "",
-      })
+      blocks.push(toolBlock(part as SessionMessageAssistantTool, ordinal(part, i)))
     }
   })
   return blocks.sort((a, b) => a.ordinal - b.ordinal)
+}
+
+/**
+ * Extract what the tool dropdown shows: the call's input and its output.
+ * The state carries both — `input` is the arguments object, `content` the
+ * result's text parts, and an error state carries the failure instead.
+ */
+function toolBlock(part: SessionMessageAssistantTool, ord: number): Block {
+  const state = (
+    part as {
+      state?: {
+        status?: string
+        input?: unknown
+        content?: unknown
+        error?: { message?: string; title?: string }
+      }
+    }
+  ).state
+  const status = state?.status ?? "running"
+
+  let input = ""
+  if (state?.input && typeof state.input === "object") {
+    input = JSON.stringify(state.input, null, 2)
+  } else if (state?.input != null) {
+    input = String(state.input)
+  }
+
+  let output: string | undefined
+  if (status === "error") {
+    output = state?.error?.message || state?.error?.title || "error"
+  } else if (Array.isArray(state?.content)) {
+    const texts = (state.content as Array<{ type?: string; text?: string }>)
+      .filter((c) => c.type === "text" && c.text)
+      .map((c) => c.text as string)
+    if (texts.length) output = texts.join("\n")
+  }
+
+  return {
+    type: "tool",
+    ordinal: ord,
+    toolId: part.id,
+    name: part.name,
+    state: status,
+    input,
+    output,
+  }
 }
 
 export function modelLabel(message: SessionMessageAssistant): string | undefined {

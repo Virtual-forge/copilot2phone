@@ -50,8 +50,8 @@ export function App() {
 
   const loadMessages = useCallback(async (sessionID: string) => {
     try {
-      const res = await client.message.list({ sessionID, order: "asc", limit: 200 })
-      setItems(toChatItems(res.data.reverse()))
+      const res = await client.message.list({ sessionID, order: "desc", limit: 200 })
+      setItems(toChatItems([...res.data].reverse()))
     } catch {
       setItems([])
     }
