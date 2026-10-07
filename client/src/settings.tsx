@@ -267,6 +267,9 @@ export function McpPanel({
     setBusy(name)
     try {
       await client.mcp.add({ server: name, config, ...location } as never)
+      // mcp.add is in-memory only: also write the user's opencode.json (the
+      // document config layer) so the server survives service restarts.
+      await persistServers((servers) => ({ ...servers, [name]: config }))
       await load()
     } catch (err) {
       setError(String(err))
@@ -279,11 +282,51 @@ export function McpPanel({
     setBusy(name)
     try {
       await client.mcp.remove({ server: name, ...location })
+      await persistServers((servers) => {
+        const next = { ...servers }
+        delete next[name]
+        return next
+      })
       await load()
     } catch (err) {
       setError(String(err))
     } finally {
       setBusy(null)
+    }
+  }
+
+  /**
+   * Persist mcp.servers into the user's opencode.json. `mcp.add`/`remove`
+   * only touch the running service's memory, so a restart loses them; the
+   * config file is what survives. The config layers carry the *complete*
+   * parsed document (verified identical to the file), so a read-modify-write
+   * through the fs API cannot clobber other keys.
+   */
+  const persistServers = async (
+    update: (servers: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    try {
+      const cfg = await client.config.get()
+      const layers = (
+        Array.isArray(cfg) ? cfg : ((cfg as { data?: unknown }).data ?? [])
+      ) as Array<{
+        type?: string
+        path?: string
+        info?: Record<string, unknown>
+      }>
+      const doc = layers.find((l) => l.type === "document" && l.path && l.info)
+      if (!doc?.path || !doc.info) return
+      const disk = JSON.parse(JSON.stringify(doc.info)) as {
+        mcp?: { servers?: Record<string, unknown> }
+      }
+      const mcp = disk.mcp ?? {}
+      mcp.servers = update(mcp.servers ?? {})
+      disk.mcp = mcp
+      const bytes = new TextEncoder().encode(JSON.stringify(disk, null, 2))
+      await client.file.write({ path: doc.path, payload: bytes })
+    } catch (err) {
+      // persistence is best-effort: the in-memory add already worked
+      console.error("config persistence failed", err)
     }
   }
 
